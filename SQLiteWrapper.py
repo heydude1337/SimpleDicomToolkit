@@ -16,7 +16,7 @@ class SQLiteWrapper(object):
     BLOB        = 'BLOB'
     
     
-    LOG_LEVEL   = logging.INFO
+    LOG_LEVEL   = logging.ERROR
     _stored_logger = None
     
     def __init__(self, database = None, table_name = None):
