@@ -8,6 +8,8 @@ Created on Tue Sep  5 16:54:20 2017
 
 from collections import OrderedDict
 import dicom
+import dateutil
+import json
 
 from SimpleDicomToolkit import dicom_date_time
 from SimpleDicomToolkit.read_dicom import DicomReadable
@@ -113,7 +115,7 @@ class DicomFiles(OrderedDict, DicomReadable):
         return self._select_by_index(index)
 
     def _select_by_index(self, index):
-        if isinstance(index, (tuple, list)):
+        if not isinstance(index, (tuple, list)):
             index = [index]
         files = list(self.keys())
         values = list(self.values())
@@ -181,7 +183,14 @@ class DicomFiles(OrderedDict, DicomReadable):
         if unique:
             tag_values = DicomFiles._unique_list(tag_values)
 
+        tag_values = parse_values(tag_values, tag)
+
+        if len(tag_values) == 1:
+            tag_values = tag_values[0]
+
         return tag_values
+
+
     def __dir__(self):
         # enable autocomplete
         res = dir(type(self)) + list(self.__dict__.keys())
@@ -194,9 +203,6 @@ class DicomFiles(OrderedDict, DicomReadable):
             raise AttributeError
         else:
             attr_value = self.get_values_for_tag(attr)
-
-        if len(attr_value) == 1:
-            attr_value = attr_value[0]
 
         return attr_value
 
@@ -228,6 +234,45 @@ class DicomFiles(OrderedDict, DicomReadable):
                 dicom_files += [file]
 
         return DicomFiles(zip(dicom_files, headers))
+
+def parse_values(values, tag):
+    """ Parse json string from database, decode and convert date time fields to
+    a datetime object """
+
+    # recursive call for list and dicts
+    if isinstance(values, dict):
+        return Header([(k, parse_values(v, k)) for k, v in values.items()])
+    elif isinstance(values, (tuple, list)):
+        return [parse_values(v, tag) for v in values]
+    # decode
+    elif isinstance(values, str):
+        # decode json string
+        try:
+            values = json.loads(values)
+        except (ValueError, TypeError):
+            pass
+
+        # if json string is decoded as dict, list or tuple do a recursive call
+        # this ensures decoding of date time values in child objects
+        if isinstance(values, (dict, list, tuple)):
+            return parse_values(values, tag)
+
+        elif isinstance(values, str):
+            # decode date time depending on the tag name
+            if tag is not None and (('Time' in tag) or ('Date' in tag)):
+                try:
+                    values = dateutil.parser.parse(values)
+                except (ValueError, TypeError):
+                    pass
+            # retrurn decoded value
+            return values
+        else:
+            # return decoded non string, list, tuple and dict values
+            return values
+    else:
+        # no parsing possible just return the values
+        return values
+
 
 def _argsort(seq):
     # http://stackoverflow.com/questions/3071415/efficient-method-to-calculate-the-rank-vector-of-a-list-in-python

@@ -6,7 +6,7 @@ Created on Tue Sep  5 16:54:20 2017
 import os
 
 import SimpleDicomToolkit
-import dateutil
+import datetime
 import SimpleITK as sitk
 
 
@@ -184,6 +184,7 @@ def read_serie(dicom_files, rescale=True, SUV=False):
         dicom_files = dicom_files.sort('SliceLocation')
     except:
         print('Slice Sorting Failed')
+        raise
 
     files = dicom_files.files
     if hasattr(dicom_files, 'folder'):
@@ -191,10 +192,11 @@ def read_serie(dicom_files, rescale=True, SUV=False):
 
     image = read_files(files)
 
-    if rescale:
-        slope, intercept = rescale_values(dicom_files)
-        image *= slope
-        image += intercept
+#    if rescale:
+#        print('Rescaling image')
+#        slope, intercept = rescale_values(dicom_files)
+#        image *= slope
+#        image += intercept
 
 
     # calculate and add a SUV scaling factor for PET.
@@ -222,16 +224,23 @@ def suv_scale_factor(header):
 
     nuclide_info   = header.RadiopharmaceuticalInformationSequence[0]
     nuclide_dose   = float(nuclide_info.RadionuclideTotalDose)
-    injection_time = nuclide_info.RadiopharmaceuticalStartTime
+    series_date    = header.SeriesDate.date()
+    series_time    = header.SeriesTime.time()
+    injection_time = nuclide_info.RadiopharmaceuticalStartTime.time()
+
+    series_dt      = datetime.datetime.combine(series_date, series_time)
+    injection_dt   = datetime.datetime.combine(series_date, injection_time)
+
+
     half_life      = float(nuclide_info.RadionuclideHalfLife)
-    series_time    = header.SeriesTime
+
     patient_weight = float(header.PatientWeight)
 
 
-    injection_time = dateutil.parser.parse(injection_time)
-    series_time = dateutil.parser.parse(series_time)
+    # injection_time = dateutil.parser.parse(injection_time)
+    # series_time = dateutil.parser.parse(series_time)
 
-    delta_time = (series_time - injection_time).total_seconds()
+    delta_time = (series_dt - injection_dt).total_seconds()
 
     decay_correction = 0.5 ** (delta_time / half_life)
 
@@ -261,6 +270,6 @@ def rescale_values(header=None):
         print('No rescale slope found in dicom header')
         intercept = 1
 
-
+    print(slope, intercept)
     return slope, intercept
 

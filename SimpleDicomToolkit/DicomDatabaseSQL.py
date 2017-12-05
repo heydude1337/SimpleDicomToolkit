@@ -7,14 +7,14 @@ Created on Tue Sep  5 16:54:20 2017
 import os
 import json
 import dicom
-
+import dateutil
 
 
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper, logging
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.read_dicom import DicomReadable
 from SimpleDicomToolkit.dicom_parser import DicomFiles, Header, \
-dicom_dataset_to_dict, VR_FLOAT, VR_INT
+dicom_dataset_to_dict, VR_FLOAT, VR_INT, parse_values
 
 class Database(SQLiteWrapper, DicomReadable):
     """ Creates a Sqlite3 table from a list of dicom files. Each header entry
@@ -27,7 +27,7 @@ class Database(SQLiteWrapper, DicomReadable):
 
     _chunk_size     = 1000              # number of files to read before committing
     _folder         = None
-    LOG_LEVEL       = logging.DEBUG
+    LOG_LEVEL       = logging.ERROR
 
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False):
         """ Create a dicom database from folder
@@ -248,12 +248,7 @@ class Database(SQLiteWrapper, DicomReadable):
         if unique:
             values = Database._unique_list(values)
 
-        if parse:
-            # use tag names as attributes in dicom sequences
-            if values and isinstance(values[0], str):
-                values = [json.loads(value) for value in values]
-
-            # values = Header.factory(values)
+        values = parse_values(values, column_name)
 
         if close:
             self.close()
@@ -275,7 +270,9 @@ class Database(SQLiteWrapper, DicomReadable):
             column_names.append(self.TAGNAMES_COL)
 
         for tag, value in kwargs.items():
-            # if type(value) is not str:
+            if not isinstance(value, str):
+                value = str(value)
+
             if not partial_match:
                 # exact values are json dumps, inexact values
                 # work on json strings.
