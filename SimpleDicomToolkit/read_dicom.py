@@ -59,11 +59,11 @@ class DicomReadable():
 
         assert self.series_count == 1
         if self._image is None:
-            try:
+            # try:
                 self._image = read_serie(self, SUV=self.SUV)
-            except:
-                print('Error during reading image serie')
-                raise
+            # except:
+            #    print('Error during reading image serie')
+            #    raise
 
         return self._image
 
@@ -114,6 +114,8 @@ class DicomReadable():
 def read_files(file_list):
     """ Read a file or list of files using SimpleTIK. A file list will be
          read as an image series in SimpleITK. """
+    if len(file_list) == 1:
+        file_list = file_list[0]
     if isinstance(file_list, str):
         file_reader = sitk.ImageFileReader()
         file_reader.SetFileName(file_list)
@@ -178,13 +180,16 @@ def read_serie(dicom_files, rescale=True, SUV=False):
 
 
     assert dicom_files.series_count == 1 # multiple series should be read by read_series
-
-    try: # sort slices may heavily depend on the exact dicom structure from the vendor.
-        # Siemens PET and CT have a slice location property
-        dicom_files = dicom_files.sort('SliceLocation')
-    except:
-        print('Slice Sorting Failed')
-        raise
+    if len(dicom_files) > 1:
+        try: # sort slices may heavily depend on the exact dicom structure from the vendor.
+            # Siemens PET and CT have a slice location property
+            dicom_files = dicom_files.sort('SliceLocation')
+        except:
+            try:
+                dicom_files = dicom_files.sort('InstanceNumber')
+            except:
+                print('Slice Sorting Failed')
+                raise
 
     files = dicom_files.files
     if hasattr(dicom_files, 'folder'):
@@ -270,6 +275,5 @@ def rescale_values(header=None):
         print('No rescale slope found in dicom header')
         intercept = 1
 
-    print(slope, intercept)
     return slope, intercept
 

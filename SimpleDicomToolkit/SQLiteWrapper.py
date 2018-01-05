@@ -4,15 +4,15 @@ Created on Tue Sep  5 16:54:20 2017
 @author: HeyDude
 """
 
-
+from SimpleDicomToolkit import Logger
 import sqlite3 as lite
 import logging
 
-class SQLiteWrapper(object):
+class SQLiteWrapper(Logger):
     """ Pythonic interface for a sqlite3 database """
 
     DATABASE    = 'database.db'
-    ID          = 'id' #column name f
+    ID          = 'id'
     IN_MEMORY   = ':memory:'
 
     # Datatypes supported by SQLite3
@@ -22,9 +22,8 @@ class SQLiteWrapper(object):
     INTEGER     = 'INTEGER'
     BLOB        = 'BLOB'
 
+    _LOG_LEVEL   = logging.ERROR
 
-    LOG_LEVEL   = logging.ERROR
-    _stored_logger = None
 
     def __init__(self, database=None, table_name=None):
         """ Connect to database and create tables
@@ -49,12 +48,6 @@ class SQLiteWrapper(object):
                 self.create_table(table_name=name, close=False)
         self.close()
 
-    @property
-    def _logger(self):
-        if self._stored_logger is None:
-            self._stored_logger = application_logger(self.__class__.__name__,
-                                                     log_level=self.LOG_LEVEL)
-        return self._stored_logger
 
     def execute(self, sql_query, values=None, close=True, fetch_all=False):
         """ Execute a sql query, database connection is opened when not
@@ -63,14 +56,14 @@ class SQLiteWrapper(object):
         """
 
         self.connect()
-        # self._logger.debug(sql_query)
+        # self.logger.debug(sql_query)
         try:
             if values is None:
                 result = self.cursor.execute(sql_query)
             else:
                 result = self.cursor.execute(sql_query, values)
         except:
-            self._logger.error('Could not excute query: \n %s', sql_query)
+            self.logger.error('Could not excute query: \n %s', sql_query)
             raise
 
         if fetch_all:
@@ -255,10 +248,10 @@ class SQLiteWrapper(object):
     def delete_rows(self, table_name, column=None, value=None, close=True):
         """ Delete rows from table where column value equals specified value """
 
-        cmd = "DELETE FROM {table} WHERE {column}='{value}'"
-        cmd = cmd.format(table=table_name, column=column, value=value)
+        cmd = "DELETE FROM {table} WHERE {column}=?"
+        cmd = cmd.format(table=table_name, column=column)
 
-        self.execute(cmd, close=close)
+        self.execute(cmd, values=[value], close=close)
 
     def connect(self):
         """Connect to the SQLite3 database."""
@@ -273,7 +266,7 @@ class SQLiteWrapper(object):
     def close(self):
         """Dicconnect form the SQLite3 database and commit changes."""
         if self.connected:
-            self._logger.debug('Closing database connection and committing changes.')
+            self.logger.debug('Closing database connection and committing changes.')
 
             # traceback.print_stack()
 
@@ -296,32 +289,3 @@ class SQLiteWrapper(object):
         binding_str += ')'
         return binding_str
 
-
-
-
-def application_logger(app_name, fname=None, log_level=logging.DEBUG,
-                       log_to_console=True, log_format=None):
-    """ Create a simple logger object for a specific application name (app_name).
-        log_level and log_to_console can be set. Log to file is done when fname
-        is a valid filename """
-    logger = logging.getLogger(app_name)
-    logger.setLevel(log_level)
-    logger.handlers = []
-    # create file handler which logs even debug messages
-    if log_format is None:
-        log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    formatter = logging.Formatter(log_format)
-
-    if not fname is None:
-        fh = logging.FileHandler(fname)
-        fh.setLevel(log_level)
-        fh.setFormatter(formatter)
-        logger.addHandler(fh)
-
-    if log_to_console:
-        ch = logging.StreamHandler()
-        ch.setLevel(log_level)
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
-
-    return logger

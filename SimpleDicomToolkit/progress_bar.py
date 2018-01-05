@@ -19,13 +19,13 @@ def progress_bar(iteration, total, prefix = '', suffix = '', decimals = 1, lengt
     bar = fill * filledLength + '-' * (length - filledLength)
     print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end = '\r')
     # Print New Line on Complete
-    if iteration == total: 
+    if iteration == total:
         print()
-        
-        
-# 
+
+
+#
 # Sample Usage
-# 
+#
 
 #from time import sleep
 #
