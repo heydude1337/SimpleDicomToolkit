@@ -17,7 +17,10 @@ from SimpleDicomToolkit.read_dicom import DicomReadable
 from SimpleDicomToolkit.dicom_parser import DicomFiles, Header, \
 Parser, VR_FLOAT, VR_INT
 
+
+
 class Database(SQLiteWrapper, DicomReadable):
+
     """ Creates a Sqlite3 table from a list of dicom files. Each header entry
     is stored in a seperate column. Sequences are stored in a single column """
 
@@ -29,6 +32,7 @@ class Database(SQLiteWrapper, DicomReadable):
     _chunk_size     = 1000              # number of files to read before committing
     _folder         = None
     LOG_LEVEL       = logging.ERROR
+    DEFAULT_FOLDER = '/Users/marcel/Horos Data/DATABASE.noindex'
 
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False):
         """ Create a dicom database from folder
@@ -41,6 +45,8 @@ class Database(SQLiteWrapper, DicomReadable):
         if silent:
             self.LOG_LEVEL = logging.ERROR
         # database file
+        if folder is None:
+            folder = self.DEFAULT_FOLDER
 
         database = os.path.join(folder, Database.DATABASE)
 
