@@ -9,7 +9,7 @@ Created on Sun Nov 26 12:56:47 2017
 from setuptools import setup
 
 README = 'README.md'
-VERSION = 0.11
+VERSION = 0.12
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
