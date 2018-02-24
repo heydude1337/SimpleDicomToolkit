@@ -61,9 +61,9 @@ class CacheToDisk(dict):
     def _file_name_for_key(self, key):
         return os.path.join(self.folder, key) 
        
-    def _load(file_name):
+    def _load(self, file_name):
         return pickle.load(open(file_name, 'rb'))
-    def _dump(file_name, data):
+    def _dump(self, file_name, data):
         
         pickle.dump(open(file_name, 'rb'), data)
         

@@ -76,6 +76,7 @@ class OrthancUploader():
         for root, dirs, files in os.walk(folder):
             for f in files:
                 self.upload_file(os.path.join(root, f))
+        print('Finished!')
 
 if __name__ == "__main__":
     folder = '/Users/marcel/Python/PSMA/temp/0202-0370'

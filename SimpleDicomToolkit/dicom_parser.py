@@ -4,7 +4,11 @@ Created on Tue Sep  5 16:54:20 2017
 @author: HeyDude
 """
 
-import dicom
+try:
+    import pydicom as dicom
+except ImportError:
+    import dicom
+
 import dateutil
 import json
 from collections import OrderedDict

@@ -40,7 +40,7 @@ setup(name=NAME,
       license='MIT',
       packages=['SimpleDicomToolkit'],
       install_requires=[
-          'SimpleITK', 'pydicom'
+          'SimpleITK', 'pydicom', 'httplib2'
       ],
       include_package_data=True,
       zip_safe=False)

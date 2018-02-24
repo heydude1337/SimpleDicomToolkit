@@ -6,17 +6,20 @@ Created on Tue Sep  5 16:54:20 2017
 """
 import os
 import json
-import dicom
+
+try:
+    import pydicom as dicom
+except ImportError:
+    import dicom
+
 import logging
-
-
 
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.read_dicom import DicomReadable
 from SimpleDicomToolkit.dicom_parser import DicomFiles, Header, \
 Parser, VR_FLOAT, VR_INT
-
+from SimpleDicomToolkit import get_setting, DEFAULT_FOLDER
 
 
 class Database(SQLiteWrapper, DicomReadable):
@@ -32,8 +35,7 @@ class Database(SQLiteWrapper, DicomReadable):
     _chunk_size     = 1000              # number of files to read before committing
     _folder         = None
     LOG_LEVEL       = logging.ERROR
-    DEFAULT_FOLDER = '/Users/marcel/Horos Data/DATABASE.noindex'
-
+    
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False):
         """ Create a dicom database from folder
 
@@ -46,7 +48,9 @@ class Database(SQLiteWrapper, DicomReadable):
             self.LOG_LEVEL = logging.ERROR
         # database file
         if folder is None:
-            folder = self.DEFAULT_FOLDER
+            folder = get_setting(DEFAULT_FOLDER, default_value=None)
+            if folder is None:
+                raise FileNotFoundError('No folder specified!')
 
         database = os.path.join(folder, Database.DATABASE)
 
@@ -423,8 +427,3 @@ class Database(SQLiteWrapper, DicomReadable):
 
         return unique_list
 
-
-
-if __name__ == "__main__":
-    test_folder = '/Users/marcel/Documents/Horos Data/Database.noindex'
-    db = Database(folder = test_folder, silent = True)
