@@ -36,7 +36,8 @@ class Database(SQLiteWrapper, DicomReadable):
     _folder         = None
     _LOG_LEVEL       = logging.ERROR
 
-    def __init__(self, folder=None, rebuild=False, scan=True, silent=False):
+    def __init__(self, folder=None, rebuild=False, scan=True, silent=False, 
+        SUV = True):
         """ Create a dicom database from folder
 
             rebuild: Deletes the database file and generates a new database
@@ -44,6 +45,7 @@ class Database(SQLiteWrapper, DicomReadable):
                      the database. Missing files will be removed as well
 
         """
+        self.SUV = SUV
         if silent:
             self.LOG_LEVEL = logging.ERROR
         # database file
