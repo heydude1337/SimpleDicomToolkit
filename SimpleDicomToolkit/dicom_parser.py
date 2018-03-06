@@ -142,7 +142,7 @@ class DicomFiles(OrderedDict, DicomReadable):
         """
         selected = self
         for tag, value in kwargs.items():
-            selected = self._select_by_value(tag_name=tag, tag_value=value,
+            selected = selected._select_by_value(tag_name=tag, tag_value=value,
                                              partial_match=partial_match)
 
         selected.SUV = self.SUV # HACK to communucate value type to reader
