@@ -34,8 +34,8 @@ class Database(SQLiteWrapper, DicomReadable):
 
     _chunk_size     = 1000              # number of files to read before committing
     _folder         = None
-    LOG_LEVEL       = logging.ERROR
-    
+    _LOG_LEVEL       = logging.ERROR
+
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False):
         """ Create a dicom database from folder
 
@@ -140,7 +140,7 @@ class Database(SQLiteWrapper, DicomReadable):
 
         # progress bar
         progress = lambda i: progress_bar(i, len(new_files), prefix='Database',
-                                          suffix='Complete')
+                                          suffix='Complete', length=79)
 
 
         if not silent:

@@ -260,7 +260,7 @@ class SQLiteWrapper(Logger):
             self.connection = lite.connect(self.database)
             self.cursor = self.connection.cursor()
             self.connected = True
-            if self.LOG_LEVEL == logging.DEBUG:
+            if self._LOG_LEVEL == logging.DEBUG:
                 self.connection.set_trace_callback(print)
 
     def close(self):
