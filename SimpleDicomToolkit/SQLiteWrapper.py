@@ -150,7 +150,7 @@ class SQLiteWrapper(Logger):
         return result
 
     def query(self, table_name, column_names=None, close=True,
-              sort_by=None, partial_match=False, **kwargs):
+              sort_by=None, partial_match=False, new_table_name=None, **kwargs):
         """ Perform a query on a table. E.g.:
             database.query(city = 'Rotterdam',
                            street = 'Blaak') returns all rows where column
@@ -167,8 +167,11 @@ class SQLiteWrapper(Logger):
         for name in column_names:
             column_str += name + ', '
         column_str = column_str[:-2]
-
+       
+        
+        
         query = 'SELECT {columns} FROM {table_name} WHERE '
+        
         query = query.format(table_name=table_name, columns=column_str)
 
         # append multiple conditions
@@ -181,7 +184,11 @@ class SQLiteWrapper(Logger):
         query = query[:-4]  # remove last AND from string
         if sort_by is not None:
             query += ' ORDER BY {0}'.format(sort_by)
-
+        
+        if new_table_name:
+            self.delete_table(new_table_name)
+            query = 'CREATE TABLE {0} AS '.format(new_table_name) + query
+            
         values = list(kwargs.values())
 
         if partial_match:
@@ -244,7 +251,11 @@ class SQLiteWrapper(Logger):
         values = list(data_dict.values())
 
         self.insert_list(table_name, values, column_names=columns, close=close)
-
+    
+    def delete_table(self, table_name):
+        cmd = 'DROP TABLE IF EXISTS {0}'
+        self.execute(cmd.format(table_name))
+        
     def delete_rows(self, table_name, column=None, value=None, close=True):
         """ Delete rows from table where column value equals specified value """
 

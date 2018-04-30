@@ -332,6 +332,11 @@ class Parser():
         if not tag.is_private:
             try:
                 name = dicom.datadict.all_names_for_tag(tag)[0]
+            except AttributeError: #pydicom new
+                try:
+                    name = dicom.datadict.dictionary_keyword(tag)
+                except:
+                    name = ''
             except:
                 name = ''
         elif tag.is_private:

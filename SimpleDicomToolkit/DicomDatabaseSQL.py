@@ -19,7 +19,7 @@ from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.read_dicom import DicomReadable
 from SimpleDicomToolkit.dicom_parser import DicomFiles, Header, \
 Parser, VR_FLOAT, VR_INT
-from SimpleDicomToolkit import get_setting, DEFAULT_FOLDER
+
 
 
 class Database(DicomReadable, Logger):
@@ -46,33 +46,46 @@ class Database(DicomReadable, Logger):
 
         """
         self.SUV = SUV
+        self._active_table = None
+        
         if silent:
             self.LOG_LEVEL = logging.ERROR
-        # database file
-        if folder is None:
-            folder = get_setting(DEFAULT_FOLDER, default_value=None)
-            if folder is None:
-                raise FileNotFoundError('No folder specified!')
-
-        database_file = os.path.join(folder, Database.DATABASE)
+            
+        self.database_file = os.path.join(folder, Database.DATABASE)
 
         self.folder = os.path.abspath(folder)
 
-
-        if rebuild and os.path.exists(database_file):
-            os.remove(database_file)
+        if rebuild and os.path.exists(self.database_file):
+            os.remove(self.database_file)
             scan = True
-
-        self.database = SQLiteWrapper(database_file=database_file)
+        
+        if self.folder is not None:
+            self._init_database()
+        
+        if scan:
+            self._update_db()
+    
+    @property
+    def active_table(self):
+        if self._active_table is None:
+            self._active_table = self.MAIN_TABLE
+        return self._active_table
+    
+    @active_table.setter
+    def active_table(self, table_name):
+        self._active_table = table_name
+    
+    def reset(self):
+        self.active_table = self.MAIN_TABLE
+        
+    def _init_database(self):
+        self.database = SQLiteWrapper(database_file=self.database_file)
 
         self.logger.info('Root folder: %s', self.folder)
         self.logger.info('Databsase file: %s', self.database.database_file)
         self.database.connect()
         self._create_table() # create empty table if not exists
 
-        if scan:
-            new_files, not_found = self._scan_files()
-            self._update_db(new_files, not_found, silent=silent)
         self.database.close()
 
     def _create_table(self):
@@ -87,50 +100,13 @@ class Database(DicomReadable, Logger):
 
         self.database.execute(cmd, close=False)
 
-    def _scan_files(self):
-        """ Find all files in folder and add dicom headers to database.
-        If overwrite is False, existing files in database will not be updated
-        """
-        self.logger.info('Scanning files....')
-        # recursively find all files in the folder
-        self.logger.info('Populating file list in %s', self.folder)
+   
 
+    def _update_db(self, silent=False):
 
-        files = FileScanner.files_in_folder(self.folder, recursive=True)
-
-        self.logger.debug('%s files in folder', len(str(files)))
-
-        # extract relative path
-
-        files = [os.path.relpath(f, self.folder) for f in files]
-        self.logger.debug('path extracted')
-
-        # normalze path
-        files = [os.path.normpath(file) for file in files]
-        self.logger.debug('path normalized')
-
-
-        #file names already in database
-        files_in_db = self.files
-        self.logger.debug('Query file in database')
-
-
-        # use sets for performance
-        files = set(files)
-        files_in_db = set(files_in_db)
-
-        # files that are in database but were not found in file folder
-        not_found = list(files_in_db.difference(files))
-        self.logger.debug('%s files not found', len(not_found))
-
-        # files in path but not in database
-        new_files = list(files.difference(files_in_db))
-        self.logger.info('%s new files found', len(new_files))
-
-        return new_files, not_found
-
-    def _update_db(self, new_files, not_found, silent=False):
-
+        new_files, not_found = FileScanner.scan_files(self.folder, 
+                                                      recursive=True,
+                                                      existing_files=self.files)
         # handle files that were not found
         for file in not_found:
             self.remove_file(file, close=False)
@@ -244,14 +220,14 @@ class Database(DicomReadable, Logger):
     @property
     def files(self):
         """ Retrieve all files with full path from the database """
-        return self.database.get_column(self.MAIN_TABLE, self.FILENAME_COL, close=False)
+        return self.database.get_column(self.active_table, self.FILENAME_COL, close=False)
 
 
     @property
     def tag_names(self):
         """ Return the tag names that are in the database """
-        tag_names = self.database.column_names(self.MAIN_TABLE, close=False)
-        non_tags_in_db = (self.ID, self.FILENAME_COL)
+        tag_names = self.database.column_names(self.active_table, close=False)
+        non_tags_in_db = (self.database.ID, self.FILENAME_COL)
 
         for name in non_tags_in_db:
             tag_names.remove(name)
@@ -261,7 +237,7 @@ class Database(DicomReadable, Logger):
     def get_column(self, column_name, unique=True,
                    sort=True, close=True, parse=True):
         """ Return the unique values for a column with column_name """
-        values = self.database.get_column(self.MAIN_TABLE, column_name,
+        values = self.database.get_column(self.active_table, column_name,
                                     sort=sort, close=False)
 
 
@@ -276,23 +252,13 @@ class Database(DicomReadable, Logger):
 #            values.remove(None)
 
         if close:
-            self.close()
+            self.database.close()
         return values
 
-    def query(self, column_names=None, close=True, sort_by=None,
+    def query(self, close=True, sort_by=None,
               partial_match=False, **kwargs):
         """ Query the table """
-        if column_names is None:
-            # if columns are None return values for every dicom tag
-            column_names = self.tag_names
-
-        # always return file names and tag
-        if self.FILENAME_COL not in column_names:
-            column_names.append(self.FILENAME_COL)
-
-        # always return tag names
-        if self.TAGNAMES_COL not in column_names:
-            column_names.append(self.TAGNAMES_COL)
+        column_names = self.database.column_names(self.active_table)
 
         for tag, value in kwargs.items():
             if not isinstance(value, str):
@@ -304,17 +270,20 @@ class Database(DicomReadable, Logger):
                 kwargs[tag] = json.dumps(value)
 
         # perform query by super class
-        columns = self.database.query(self.MAIN_TABLE, column_names=column_names,
+        self.database.query(self.active_table, column_names=column_names,
                                 close=close, sort_by=sort_by,
-                                partial_match=partial_match, **kwargs)
+                                partial_match=partial_match,
+                                new_table_name='QUERY_RESULT', **kwargs)
+        
+        self.active_table = 'QUERY_RESULT'
 
-        # format result if any
-        if columns:
-            result = self._format_response(columns, column_names)
-            result.SUV = self.SUV
-            return result
-        else:
-            return columns
+#        # format result if any
+#        if columns:
+#            result = self._format_response(columns, column_names)
+#            result.SUV = self.SUV
+#            return result
+#        else:
+#            return columns
 
     def _format_response(self, columns, column_names):
         # return a dictionary with keys the filenames. Values are dicts
@@ -362,8 +331,21 @@ class Database(DicomReadable, Logger):
                          value=json.dumps(file_name), close=False)
 
         if close:
-            self.close()
-
+            self.database.close()
+    @staticmethod
+    def _VM_for_tag(tag):
+        try:
+            VM = dicom.datadict.dictionaryVM(tag)
+        except AttributeError:
+            VM = dicom.datadict.dictionary_VM(tag)
+        return VM
+    @staticmethod
+    def _VR_for_tag(tag):
+        try:
+            VR = dicom.datadict.dictionaryVR(tag)
+        except AttributeError:
+            VR = dicom.datadict.dictionary_VR(tag)
+        return VR
     def _add_column_for_tags(self, tag_names):
         # add columns to the databse for the given tag_names
         # the sqlite datatype will be determined from the dicom value
@@ -380,14 +362,14 @@ class Database(DicomReadable, Logger):
                                        ' Assuming values are text'))
                     sqlite_type = self.database.TEXT
                 else:
-                    VM = dicom.datadict.dictionaryVM(tag)
-                    VR = dicom.datadict.dictionaryVM(tag)
+                    VM = self._VM_for_tag(tag)
+                    VR = self._VR_for_tag(tag)
 
                     if VM == 1:
                         sqlite_type = Database._sqlite_type_for_VR(VR)
                     else:
                         # multiple values are stored as json string
-                        sqlite_type = self.TEXT
+                        sqlite_type = self.database.TEXT
 
 
                 self.database.add_column(self.MAIN_TABLE, tag_name, close=False,
@@ -429,7 +411,7 @@ class Database(DicomReadable, Logger):
 
         return unique_list
 
-class FileScanner:
+class FileScanner(Logger):
     
     @staticmethod
     def files_in_folder(dicom_dir, recursive=False):
@@ -451,5 +433,42 @@ class FileScanner:
             files = [f for f in files if not os.path.split(f)[1][0] == '.']
 
         return files
+    @staticmethod
+    def scan_files(dicom_dir, recursive=False, existing_files = []):
+        """ Find all files in folder and add dicom headers to database.
+        If overwrite is False, existing files in database will not be updated
+        """
+        
+        # recursively find all files in the folder
+
+
+        files = FileScanner.files_in_folder(dicom_dir, recursive=recursive)
+
+    
+
+        # extract relative path
+
+        files = [os.path.relpath(f, dicom_dir) for f in files]
+
+        # normalze path
+        files = [os.path.normpath(file) for file in files]
+       
+
+        #file names already in database
+       
+        # use sets for performance
+        files = set(files)
+        existing_files = set(existing_files)
+
+        # files that are in database but were not found in file folder
+        not_found = list(existing_files.difference(files))
+       
+
+        # files in path but not in database
+        new_files = list(files.difference(existing_files))
+       
+
+        return new_files, not_found
+    
 if __name__ == "__main__":
     database = Database(folder = 'C:/Users/757021/Data/HermesExport', rebuild = True)
