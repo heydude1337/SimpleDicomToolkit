@@ -13,7 +13,7 @@ except ImportError:
     import dicom
 
 import logging
-
+from SimpleDicomToolkit import Logger
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.read_dicom import DicomReadable
@@ -22,7 +22,7 @@ Parser, VR_FLOAT, VR_INT
 from SimpleDicomToolkit import get_setting, DEFAULT_FOLDER
 
 
-class Database(SQLiteWrapper, DicomReadable):
+class Database(DicomReadable, Logger):
 
     """ Creates a Sqlite3 table from a list of dicom files. Each header entry
     is stored in a seperate column. Sequences are stored in a single column """
@@ -54,26 +54,26 @@ class Database(SQLiteWrapper, DicomReadable):
             if folder is None:
                 raise FileNotFoundError('No folder specified!')
 
-        database = os.path.join(folder, Database.DATABASE)
+        database_file = os.path.join(folder, Database.DATABASE)
 
         self.folder = os.path.abspath(folder)
 
 
-        if rebuild and os.path.exists(database):
-            os.remove(database)
+        if rebuild and os.path.exists(database_file):
+            os.remove(database_file)
             scan = True
 
-        super().__init__(table_name=None, database=database)
+        self.database = SQLiteWrapper(database_file=database_file)
 
         self.logger.info('Root folder: %s', self.folder)
-        self.logger.info('Databsase file: %s', self.database)
-        self.connect()
+        self.logger.info('Databsase file: %s', self.database.database_file)
+        self.database.connect()
         self._create_table() # create empty table if not exists
 
         if scan:
             new_files, not_found = self._scan_files()
             self._update_db(new_files, not_found, silent=silent)
-        self.close()
+        self.database.close()
 
     def _create_table(self):
         cmd = """CREATE TABLE  IF NOT EXISTS {table}
@@ -85,7 +85,7 @@ class Database(SQLiteWrapper, DicomReadable):
                          file_name=self.FILENAME_COL,
                          tag_names=self.TAGNAMES_COL)
 
-        self.execute(cmd, close=False)
+        self.database.execute(cmd, close=False)
 
     def _scan_files(self):
         """ Find all files in folder and add dicom headers to database.
@@ -96,7 +96,7 @@ class Database(SQLiteWrapper, DicomReadable):
         self.logger.info('Populating file list in %s', self.folder)
 
 
-        files = Database.files_in_folder(self.folder, recursive=True)
+        files = FileScanner.files_in_folder(self.folder, recursive=True)
 
         self.logger.debug('%s files in folder', len(str(files)))
 
@@ -135,7 +135,7 @@ class Database(SQLiteWrapper, DicomReadable):
         for file in not_found:
             self.remove_file(file, close=False)
 
-        self.close() # commit removed files
+        self.database.close() # commit removed files
 
         if not new_files:
             return # nothing to add
@@ -154,7 +154,7 @@ class Database(SQLiteWrapper, DicomReadable):
         columns = None
 
         for j, batch in enumerate(batches):
-            self.connect() # connect to update db
+            self.database.connect() # connect to update db
             for i, file in enumerate(batch):
                 # display progress
                 if not silent:
@@ -171,12 +171,12 @@ class Database(SQLiteWrapper, DicomReadable):
                     columns = new_columns
 
             self.logger.debug('Committing changes to db')
-            self.close() # commit changes
+            self.database.close() # commit changes
 
     def insert_file(self, file, _existing_column_names=None, close=True):
         """ Insert a dicom file to the database """
         if _existing_column_names is None:
-            _existing_column_names = self.column_names(self.MAIN_TABLE,
+            _existing_column_names = self.database.column_names(self.MAIN_TABLE,
                                                        close=False)
 
         # read file from disk
@@ -200,14 +200,14 @@ class Database(SQLiteWrapper, DicomReadable):
 
         # encode dictionary values to json and stor in database
         try:
-            self.insert_row_dict(self.MAIN_TABLE, Database._encode(hdict),
+            self.database.insert_row_dict(self.MAIN_TABLE, Database._encode(hdict),
                                  close=close)
         except:
             print('Could not insert file: {0}'.format(file))
             raise
 
         if close:
-            self.close()
+            self.database.close()
 
         self.logger.debug(newcols)
         return newcols
@@ -220,14 +220,14 @@ class Database(SQLiteWrapper, DicomReadable):
 
     def __getattr__(self, attr):
         # enable dicom tags as attributes (default pydicom behaviour)
-        if attr in super().column_names(self.MAIN_TABLE):
+        if attr in self.database.column_names(self.MAIN_TABLE):
             values = self.get_column(attr, parse=True)
 
             if len(values) == 1:
                 return values[0]
         else:
             # print(attr + ' not valid!')
-            raise AttributeError
+            raise AttributeError(attr)
         # self.logger.info(attr + ' ' + str(values))
 
         return values
@@ -244,13 +244,13 @@ class Database(SQLiteWrapper, DicomReadable):
     @property
     def files(self):
         """ Retrieve all files with full path from the database """
-        return self.get_column(self.FILENAME_COL, close=False)
+        return self.database.get_column(self.MAIN_TABLE, self.FILENAME_COL, close=False)
 
 
     @property
     def tag_names(self):
         """ Return the tag names that are in the database """
-        tag_names = self.column_names(self.MAIN_TABLE, close=False)
+        tag_names = self.database.column_names(self.MAIN_TABLE, close=False)
         non_tags_in_db = (self.ID, self.FILENAME_COL)
 
         for name in non_tags_in_db:
@@ -261,7 +261,7 @@ class Database(SQLiteWrapper, DicomReadable):
     def get_column(self, column_name, unique=True,
                    sort=True, close=True, parse=True):
         """ Return the unique values for a column with column_name """
-        values = super().get_column(self.MAIN_TABLE, column_name,
+        values = self.database.get_column(self.MAIN_TABLE, column_name,
                                     sort=sort, close=False)
 
 
@@ -304,7 +304,7 @@ class Database(SQLiteWrapper, DicomReadable):
                 kwargs[tag] = json.dumps(value)
 
         # perform query by super class
-        columns = super().query(self.MAIN_TABLE, column_names=column_names,
+        columns = self.database.query(self.MAIN_TABLE, column_names=column_names,
                                 close=close, sort_by=sort_by,
                                 partial_match=partial_match, **kwargs)
 
@@ -358,7 +358,7 @@ class Database(SQLiteWrapper, DicomReadable):
 
     def remove_file(self, file_name, close=True):
         """ Remove file from database """
-        self.delete_rows(self.MAIN_TABLE, column=self.FILENAME_COL,
+        self.database.delete_rows(self.MAIN_TABLE, column=self.FILENAME_COL,
                          value=json.dumps(file_name), close=False)
 
         if close:
@@ -369,7 +369,7 @@ class Database(SQLiteWrapper, DicomReadable):
         # the sqlite datatype will be determined from the dicom value
         # representation in the datadict of pydicom
 
-        existing_columns = self.column_names(self.MAIN_TABLE, close=False)
+        existing_columns = self.database.column_names(self.MAIN_TABLE, close=False)
 
         for tag_name in tag_names:
             if tag_name not in existing_columns:
@@ -378,7 +378,7 @@ class Database(SQLiteWrapper, DicomReadable):
                 if tag is None:
                     self.logger.info(('Error getting pydicom infor for {0}.'.format(tag_name),
                                        ' Assuming values are text'))
-                    sqlite_type = self.TEXT
+                    sqlite_type = self.database.TEXT
                 else:
                     VM = dicom.datadict.dictionaryVM(tag)
                     VR = dicom.datadict.dictionaryVM(tag)
@@ -390,7 +390,7 @@ class Database(SQLiteWrapper, DicomReadable):
                         sqlite_type = self.TEXT
 
 
-                self.add_column(self.MAIN_TABLE, tag_name, close=False,
+                self.database.add_column(self.MAIN_TABLE, tag_name, close=False,
                                 var_type=sqlite_type)
     @staticmethod
     def _chunks(iterable, chunksize):
@@ -429,3 +429,27 @@ class Database(SQLiteWrapper, DicomReadable):
 
         return unique_list
 
+class FileScanner:
+    
+    @staticmethod
+    def files_in_folder(dicom_dir, recursive=False):
+        """ Find all files in a folder, use recursive if files inside subdirs
+        should be included. """
+
+        # Walk through a folder and recursively list all files
+        if not recursive:
+            files = os.listdir(dicom_dir)
+        else:
+            files = []
+            for root, dirs, filenames in os.walk(dicom_dir):
+                for file in filenames:
+                    full_file = os.path.join(root, file)
+                    if os.path.isfile(full_file):
+                        files += [full_file]
+            # remove system specific files and the database file that
+            # start with '.'
+            files = [f for f in files if not os.path.split(f)[1][0] == '.']
+
+        return files
+if __name__ == "__main__":
+    database = Database(folder = 'C:/Users/757021/Data/HermesExport', rebuild = True)

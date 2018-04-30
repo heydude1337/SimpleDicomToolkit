@@ -6,7 +6,7 @@ defaults.yml
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.db
 # C extensions
 *.so
 

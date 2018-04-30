@@ -89,26 +89,7 @@ class DicomReadable():
 
         return self._images
 
-    @staticmethod
-    def files_in_folder(dicom_dir, recursive=False):
-        """ Find all files in a folder, use recursive if files inside subdirs
-        should be included. """
 
-        # Walk through a folder and recursively list all files
-        if not recursive:
-            files = os.listdir(dicom_dir)
-        else:
-            files = []
-            for root, dirs, filenames in os.walk(dicom_dir):
-                for file in filenames:
-                    full_file = os.path.join(root, file)
-                    if os.path.isfile(full_file):
-                        files += [full_file]
-            # remove system specific files and the database file that
-            # start with '.'
-            files = [f for f in files if not os.path.split(f)[1][0] == '.']
-
-        return files
 
 
 def read_files(file_list):

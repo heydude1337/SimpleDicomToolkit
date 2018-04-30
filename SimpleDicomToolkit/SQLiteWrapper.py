@@ -25,19 +25,19 @@ class SQLiteWrapper(Logger):
     _LOG_LEVEL   = logging.ERROR
 
 
-    def __init__(self, database=None, table_name=None):
+    def __init__(self, database_file=None, table_name=None):
         """ Connect to database and create tables
         database:   new or existing database file
         table_name:     names for table(s) that will be used. If they don't
                         exist they will be created."""
-
-        if database is None:
-            database = self.DATABASE
+        self.database = None               	
+        if database_file is None:
+            database_file = self.DATABASE_FILE
 
         if not isinstance(table_name, (tuple, list)) and table_name is not None:
             table_name = [table_name]
 
-        self.database = database
+        self.database_file = database_file
         self.connected = False # self.connect() needs this attribute
         self.connection = None # Databse connection
         self.cursor = None # Database cursor
@@ -257,7 +257,7 @@ class SQLiteWrapper(Logger):
         """Connect to the SQLite3 database."""
 
         if not self.connected:
-            self.connection = lite.connect(self.database)
+            self.connection = lite.connect(self.database_file)
             self.cursor = self.connection.cursor()
             self.connected = True
             if self._LOG_LEVEL == logging.DEBUG:
