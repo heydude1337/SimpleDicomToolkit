@@ -8,109 +8,64 @@ import os
 import SimpleDicomToolkit
 import datetime
 import SimpleITK as sitk
-import dateutil
-import pydicom
-from dicom_parser import Parser
+
+
+
+
+# source: http://dicom.nema.org/dicom/2013/output/chtml/part05/sect_6.2.html
+VR_STRING   = ('AE', 'AS', 'AT', 'CS', 'LO', 'LT', 'OB', 'OW', \
+                   'SH', 'ST', 'UI', 'UN', 'UT') # stored as string
+VR_PN       = 'PN'
+VR_DATE     = 'DA'
+VR_DATETIME = 'DT'
+VR_TIME     = 'TM'
+VR_FLOAT    = ('DS', 'FL', 'FD', 'OD') #DS is unparsed, FL and FD are floats
+VR_INT      = ('IS', 'SL', 'SS', 'UL', 'US')
+VR_SEQ      = 'SQ'
 
 class DicomReadable():
     """ Superclass for DicomFiles and DicomDatabaseSQL """
     _images = None
     _image = None
-    _headers = None
     MAX_FILES = 5000 # max number of files to be read at by property images
     SUV = True # convert PET images to SUV
 
-    @property
-    def headers(self):
-        """ Get pydicom headers from values in database. Pydicom headers 
-        are generated from database content. """
-        if len(self.files) > self.MAX_FILES:
-            print('Number of files exceeds MAX_FILES property')
-            raise IOError
-        
-        if self._headers is not None:
-            return self._headers
-        
-        if self.instance_count < 1:
-            self._headers = []
-            return self.headers
-        
-        headers = []
-        uids = self.SOPInstanceUID
-        if not isinstance(uids, list):
-            uids = [uids]
-       
-        headers = [self.header_for_uid(uid) for uid in uids]
-        
-        if len(headers) == 1:
-            headers = headers[0]
-            
-        self._headers = headers
-                
-        return self._headers
-    
-    def header_for_uid(self, sopinstanceuid):
-        db = self.query(SOPInstanceUID = sopinstanceuid)
-        header_dict = {}
-        #return db.dicom_tag_names
-        for tag_name in db.dicom_tag_names:
-            value = db.get_column(tag_name, unique=True, sort=False, parse=False)[0]
-            #print(value)
-            header_dict[tag_name] = value
-        header = Parser.dataset_from_dict(header_dict)
-        return header
-            
     @property
     def files(self):
         """ List of dicom files that will be read to an image or images. """
         # must be implemented by subclass
         raise NotImplementedError
-    
+
+    @property
+    def series_count(self):
+        """ Return the number of dicom series present"""
+        if not hasattr(self, 'SeriesInstanceUID'):
+            return 0
+
+        uids = getattr(self, 'SeriesInstanceUID')
+
+        if isinstance(uids, str):
+            return 1
+        elif isinstance(uids, list):
+            return len(uids)
+        else:
+            raise ValueError
+
     @property
     def image(self):
         """ Returns an sitk image for the files in the files property.
             All files must belong to the same dicom series
             (same SeriesInstanceUID). """
-        
-        if self._image is not None:
-            return self._image
-        
+
         assert self.series_count == 1
-        
-        series_uid = self.SeriesInstanceUID
-        
-        if hasattr(self, 'SliceLocation'):
-            sort_by = 'SliceLocation'
-        elif hasattr(self, 'InstanceNumber'):
-            sort_by = 'InstanceNumber'
-        else:
-            self.logger.error('Slice Sorting Failed Before Reading!')
-            sort_by = None
-            
-        to_read = self.query(SeriesInstanceUID=series_uid, sort_by=sort_by)
-        
-        image = read_serie(to_read.files, SUV=False, 
-                           issorted=True, folder=to_read.folder)
- 
-        # get first uid from file
-        uid = self.SOPInstanceUID
-        if isinstance(uid, list):
-            uid = uid[0]
-        # generate header with SUV metadata
-        header = self.header_for_uid(uid)
-        
-        # calculate suv scale factor
-        try:
-            bqml_to_suv = suv_scale_factor(header)
-        except:
-            if self.SUV:
-                raise
-            
-        if self.SUV:
-            image *= bqml_to_suv
-        
-        image.bqml_to_suv = bqml_to_suv
-        return image
+        if self._image is None:
+            # try:
+                self._image = read_serie(self, SUV=self.SUV)
+            # except:
+            #    print('Error during reading image serie')
+            #    raise
+
+        return self._image
 
     @property
     def images(self):
@@ -124,20 +79,17 @@ class DicomReadable():
             print('Number of files exceeds MAX_FILES property')
             raise IOError
 
-        if self._images is not None:
-            return self._images
-        
-        assert hasattr(self, SimpleDicomToolkit.SERIESINSTANCEUID)
-        
-        images = {}
-        
-        for uid in self.SeriesInstanceUID:
-            images[uid] = self.query(SeriesInstanceUID=uid).image
-        
-        self._images = images
+        if self._images is None:
+            assert hasattr(self, SimpleDicomToolkit.SERIESINSTANCEUID)
+            try:
+                self._images = read_series(self, SUV=self.SUV)
+            except:
+                print('Error during reading image series')
+                raise
+
         return self._images
 
-    
+
 
 
 def read_files(file_list):
@@ -162,7 +114,41 @@ def read_files(file_list):
     return image
 
 
-def read_serie(files, rescale=True, SUV=False, issorted = False, folder=None):
+def read_series(dicom_files, series_uids=None,
+                flatten=True, rescale=True, SUV=False):
+    """ Read an entire dicom database to SimpleITK images. A dictionary is
+        returned with SeriesInstanceUID as key and SimpleITK images as values.
+
+        series_uids: When None (default) all series are read. Otherwise a
+                    single SeriesInstanceUID may be specified or a list of UIDs
+
+        split_acquisitions: Returns seperate images for each acquisition number.
+        single_output: Return a single image and header if only one dicom series
+                       was found. Same output as read_serie.
+        """
+
+
+    if series_uids is None: # read everyting
+        series_uids = dicom_files.SeriesInstanceUID
+
+    if not isinstance(series_uids, (tuple, list)):
+        series_uids = [series_uids]
+
+    dicom_filess = [dicom_files.filter(SimpleDicomToolkit.SERIESINSTANCEUID, uid) \
+                    for uid in series_uids]
+
+    reader = lambda df: read_serie(df, SUV=SUV, rescale=rescale)
+    result = [reader(df) for df in dicom_filess]
+
+    images, headers = list(zip(*result))
+
+    if len(images) == 1 and flatten:
+        images = images[0]
+        headers = headers[0]
+
+    return images
+
+def read_serie(dicom_files, rescale=True, SUV=False):
     """ Read a single image serie from a dicom database to SimpleITK images.
 
         series_uid: Define the SeriesInstanceUID to be read from the database.
@@ -172,11 +158,23 @@ def read_serie(files, rescale=True, SUV=False, issorted = False, folder=None):
 
         split_acquisitions: Returns seperate images for each acquisition number.
         """
-    if not(issorted) and len(files) > 1:
-        raise ImportError
-    
-    if folder is not None:
-        files = [os.path.join(folder, file) for file in files]
+
+
+    assert dicom_files.series_count == 1 # multiple series should be read by read_series
+    if len(dicom_files) > 1:
+        try: # sort slices may heavily depend on the exact dicom structure from the vendor.
+            # Siemens PET and CT have a slice location property
+            dicom_files = dicom_files.sort('SliceLocation')
+        except:
+            try:
+                dicom_files = dicom_files.sort('InstanceNumber')
+            except:
+                print('Slice Sorting Failed')
+                raise
+
+    files = dicom_files.files
+    if hasattr(dicom_files, 'folder'):
+        files = [os.path.join(dicom_files.folder, file) for file in files]
 
     image = read_files(files)
 
@@ -188,12 +186,19 @@ def read_serie(files, rescale=True, SUV=False, issorted = False, folder=None):
 
 
     # calculate and add a SUV scaling factor for PET.
-    if SUV:
-        factor = suv_scale_factor(pydicom.read_file(files[0], 
-                                                    stop_before_pixels=True))
-        image *= factor
-        image.BQML_TO_SUV = factor
-        image.SUB_TO_BQML = 1/factor
+    if dicom_files.SOPClassUID == SimpleDicomToolkit.SOP_CLASS_UID_PET:
+        try:
+            factor = suv_scale_factor(dicom_files)
+
+        except:
+            print('No SUV factor could be calculated!')
+            factor = 1
+
+        if SUV:
+            image *= factor
+
+        setattr(dicom_files, SimpleDicomToolkit.SUV_SCALE_FACTOR, factor)
+
     return image
 
 def suv_scale_factor(header):
@@ -202,15 +207,13 @@ def suv_scale_factor(header):
 
     # header = image.header
     # calc suv scaling
+
     nuclide_info   = header.RadiopharmaceuticalInformationSequence[0]
-    
-    parse = lambda x: dateutil.parser.parse(x)
-    series_date = parse(header.SeriesDate).date()
-    series_time = parse(header.SeriesTime).time()
-    injection_time = parse(nuclide_info.RadiopharmaceuticalStartTime).time()
-    
     nuclide_dose   = float(nuclide_info.RadionuclideTotalDose)
-    
+    series_date    = header.SeriesDate.date()
+    series_time    = header.SeriesTime.time()
+    injection_time = nuclide_info.RadiopharmaceuticalStartTime.time()
+
     series_dt      = datetime.datetime.combine(series_date, series_time)
     injection_dt   = datetime.datetime.combine(series_date, injection_time)
 
@@ -218,6 +221,10 @@ def suv_scale_factor(header):
     half_life      = float(nuclide_info.RadionuclideHalfLife)
 
     patient_weight = float(header.PatientWeight)
+
+
+    # injection_time = dateutil.parser.parse(injection_time)
+    # series_time = dateutil.parser.parse(series_time)
 
     delta_time = (series_dt - injection_dt).total_seconds()
 

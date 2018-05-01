@@ -13,13 +13,12 @@ except ImportError:
     import dicom
 
 import logging
-from SimpleDicomToolkit import Logger
+import itertools
+from SimpleDicomToolkit import Logger, FileScanner
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.read_dicom import DicomReadable
-from SimpleDicomToolkit.dicom_parser import DicomFiles, Header, \
-Parser, VR_FLOAT, VR_INT
-
+from SimpleDicomToolkit.dicom_parser import Parser, Header 
 
 
 class Database(DicomReadable, Logger):
@@ -27,14 +26,16 @@ class Database(DicomReadable, Logger):
     """ Creates a Sqlite3 table from a list of dicom files. Each header entry
     is stored in a seperate column. Sequences are stored in a single column """
 
-    FILENAME_COL    = 'dicom_file_name' # colum in table that stores filenames
-    TAGNAMES_COL    = 'dicom_tag_names' # column that stores tag names for file
-    DATABASE        = 'minidicom.db'    # default file name for database
-    MAIN_TABLE      = 'DicomMetaData'   # stores values for each tag
-
-    _chunk_size     = 1000              # number of files to read before committing
+    _FILENAME_COL    = 'dicom_file_name' # colum in table that stores filenames
+    _TAGNAMES_COL    = 'dicom_tag_names' # column that stores tag names for file
+    _DATABASE_FILE   = 'minidicom.db'    # default file name for database
+    _MAIN_TABLE      = 'DicomMetaDataTable'   # stores values for each tag
+    _FILENAME_TABLE  = 'FileNameTable' # stores non dicom files
+    _QUERY_RESULT    = 'QueryResultTable' # stores queries
+    
+    _chunk_size     = 1000  # number of files to read before committing
     _folder         = None
-    _LOG_LEVEL       = logging.ERROR
+    _LOG_LEVEL       = logging.INFO
 
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False, 
         SUV = True):
@@ -43,15 +44,16 @@ class Database(DicomReadable, Logger):
             rebuild: Deletes the database file and generates a new database
             scan:    Scans for all dicom files in the folder and updates
                      the database. Missing files will be removed as well
+            silent:  Supress progressbar and log messages except errors
 
         """
         self.SUV = SUV
-        self._active_table = None
+        self.__active_table = None
         
         if silent:
-            self.LOG_LEVEL = logging.ERROR
+            self._LOG_LEVEL = logging.ERROR
             
-        self.database_file = os.path.join(folder, Database.DATABASE)
+        self.database_file = os.path.join(folder, Database._DATABASE_FILE)
 
         self.folder = os.path.abspath(folder)
 
@@ -66,50 +68,102 @@ class Database(DicomReadable, Logger):
             self._update_db()
     
     @property
-    def active_table(self):
-        if self._active_table is None:
-            self._active_table = self.MAIN_TABLE
-        return self._active_table
+    def files(self):
+        """ Retrieve all dicom files with  path from the database """
+        return self.database.get_column(self._active_table, 
+                                        self._FILENAME_COL, 
+                                        close=True)
+    @property
+    def _files(self):
+        """ Retrieve all files with path from the database """
+        dicom_files = self.files
+        non_dicom_files = self.database.get_column(self._FILENAME_TABLE, 
+                                        self._FILENAME_COL, 
+                                        close=True)
+        return [*dicom_files, *non_dicom_files]
     
-    @active_table.setter
-    def active_table(self, table_name):
-        self._active_table = table_name
+    @property
+    def columns(self):
+        return self.database.column_names(self._active_table, close=True)
+   
+    @property
+    def tag_names(self):
+        """ Return the tag names that are in the database """
+     
+        non_tags_in_db = (self.database.ID, self._FILENAME_COL,
+                          self._TAGNAMES_COL)
+
+        return  sorted([tagname for tagname in self.columns\
+                        if tagname not in non_tags_in_db])
     
+    @property
+    def _active_table(self):
+        # the table from which data is retrieved
+        if self.__active_table is None:
+            self.__active_table = self._MAIN_TABLE
+        return self.__active_table
+    
+    @_active_table.setter
+    def _active_table(self, table_name):
+        self.__active_table = table_name
+    
+    @property
+    def headers(self):
+        if len(self) > self._chunk_size:
+            raise IndexError('Database too big to generate headers')
+        
     def reset(self):
-        self.active_table = self.MAIN_TABLE
+        """ After a query a subset of the database is visible, use reset
+        to make all data visible again. """
+        self._active_table = self._MAIN_TABLE
         
     def _init_database(self):
+        # make connection to the database and make columns if they don't exist
         self.database = SQLiteWrapper(database_file=self.database_file)
-
+        self.database._LOG_LEVEL = self._LOG_LEVEL
         self.logger.info('Root folder: %s', self.folder)
         self.logger.info('Databsase file: %s', self.database.database_file)
         self.database.connect()
-        self._create_table() # create empty table if not exists
-
+        self._create_main_table() # create empty table if not exists
+        self._create_file_table()
         self.database.close()
 
-    def _create_table(self):
+    def _create_file_table(self):
+        # create the table that holds non dicom files
+        cmd = """CREATE TABLE  IF NOT EXISTS {table}
+                 (id INTEGER AUTO_INCREMENT PRIMARY KEY,
+                  {file_name} TEXT UNIQUE)
+                 """
+
+        cmd = cmd.format(table=self._FILENAME_TABLE,
+                         file_name=self._FILENAME_COL,
+                         tag_names=self._TAGNAMES_COL)
+
+        self.database.execute(cmd)
+        
+    def _create_main_table(self):
+        # create the main table with dicom tags as columns
         cmd = """CREATE TABLE  IF NOT EXISTS {table}
                  (id INTEGER AUTO_INCREMENT PRIMARY KEY,
                   {file_name} TEXT UNIQUE,
                   {tag_names} TEXT)"""
 
-        cmd = cmd.format(table=self.MAIN_TABLE,
-                         file_name=self.FILENAME_COL,
-                         tag_names=self.TAGNAMES_COL)
+        cmd = cmd.format(table=self._MAIN_TABLE,
+                         file_name=self._FILENAME_COL,
+                         tag_names=self._TAGNAMES_COL)
 
-        self.database.execute(cmd, close=False)
+        self.database.execute(cmd)
 
    
 
     def _update_db(self, silent=False):
-
+        # scan for file new and removed files in the folder. Update the
+        # database with new files, remove files that are no longer in folder
         new_files, not_found = FileScanner.scan_files(self.folder, 
-                                                      recursive=True,
-                                                      existing_files=self.files)
+                                recursive=True, existing_files=self._files)
         # handle files that were not found
-        for file in not_found:
-            self.remove_file(file, close=False)
+       
+        self.remove_files(not_found)
 
         self.database.close() # commit removed files
 
@@ -127,10 +181,11 @@ class Database(DicomReadable, Logger):
         # divide files into equally sized batches. Changes to the db
         # are committed after each batch
         batches = self._chunks(new_files, self._chunk_size)
-        columns = None
-
+        columns = self.columns
+     
         for j, batch in enumerate(batches):
             self.database.connect() # connect to update db
+           
             for i, file in enumerate(batch):
                 # display progress
                 if not silent:
@@ -138,45 +193,53 @@ class Database(DicomReadable, Logger):
 
                 # insert file and keep track of newly create columns without
                 # additional database queries
-                new_columns = self.insert_file(file,
-                                               _existing_column_names=columns,
-                                               close=False)
+                try:
+                    new_columns = self.insert_file(file,
+                                _existing_column_names=columns, close=False)
+                                               
+                except dicom.errors.InvalidDicomError:
+                    # list file as non dicom
+                    self.database.insert_list(self._FILENAME_TABLE, file,
+                                      column_names = self._FILENAME_COL,
+                                      close = False)
+                    
+                    continue
+                
                 if columns is not None:
                     columns = list(set(columns + new_columns))
                 else:
                     columns = new_columns
-
+                
+                
             self.logger.debug('Committing changes to db')
             self.database.close() # commit changes
 
     def insert_file(self, file, _existing_column_names=None, close=True):
         """ Insert a dicom file to the database """
         if _existing_column_names is None:
-            _existing_column_names = self.database.column_names(self.MAIN_TABLE,
+            _existing_column_names = self.database.column_names(self._MAIN_TABLE,
                                                        close=False)
 
         # read file from disk
         fullfile = os.path.join(self.folder, file)
-        try:
-            header = dicom.read_file(fullfile, stop_before_pixels=True)
-        except dicom.errors.InvalidDicomError:
-            self.logger.info('%s not a dicom file', fullfile)
-            return _existing_column_names
+     
+        header = dicom.read_file(fullfile, stop_before_pixels=True)
+
 
         # convert header to dictionary
-        hdict = Parser.dicom_dataset_to_dict(header)
-        hdict[self.TAGNAMES_COL] = list(hdict.keys()) # store tag names
-        hdict[self.FILENAME_COL] = file # add filenmae to dictionary
+        hdict = self._encode(header)
+        hdict[self._TAGNAMES_COL] = json.dumps(list(hdict.keys())) # store tag names
+        hdict[self._FILENAME_COL] = file # add filenmae to dictionary
 
         # determine which columns need to be added to the database
         newcols = [c for c in hdict.keys() if c not in _existing_column_names]
 
         # add columns
-        self._add_column_for_tags(newcols)
+        self._add_column_for_tags(newcols, skip_check=True)
 
         # encode dictionary values to json and stor in database
         try:
-            self.database.insert_row_dict(self.MAIN_TABLE, Database._encode(hdict),
+            self.database.insert_row_dict(self._MAIN_TABLE, hdict,
                                  close=close)
         except:
             print('Could not insert file: {0}'.format(file))
@@ -196,7 +259,7 @@ class Database(DicomReadable, Logger):
 
     def __getattr__(self, attr):
         # enable dicom tags as attributes (default pydicom behaviour)
-        if attr in self.database.column_names(self.MAIN_TABLE):
+        if attr in self.database.column_names(self._MAIN_TABLE):
             values = self.get_column(attr, parse=True)
 
             if len(values) == 1:
@@ -217,39 +280,14 @@ class Database(DicomReadable, Logger):
     def __repr__(self):
         return self.__str__()
 
-    @property
-    def files(self):
-        """ Retrieve all files with full path from the database """
-        return self.database.get_column(self.active_table, self.FILENAME_COL, close=False)
-
-
-    @property
-    def tag_names(self):
-        """ Return the tag names that are in the database """
-        tag_names = self.database.column_names(self.active_table, close=False)
-        non_tags_in_db = (self.database.ID, self.FILENAME_COL)
-
-        for name in non_tags_in_db:
-            tag_names.remove(name)
-
-        return  sorted(tag_names)
-
-    def get_column(self, column_name, unique=True,
+    def get_column(self, column_name, distinct=True,
                    sort=True, close=True, parse=True):
         """ Return the unique values for a column with column_name """
-        values = self.database.get_column(self.active_table, column_name,
-                                    sort=sort, close=False)
-
-
-        if unique:
-            values = Database._unique_list(values)
+        values = self.database.get_column(self._active_table, column_name,
+                                    sort=sort, distinct=distinct, close=False)
 
         if parse:
-            values = Parser.parse_values(values, column_name)
-
-#        # Remove empty values
-#        if type(values) is list and unique:
-#            values.remove(None)
+            values = [Parser.decode_entry(column_name, vi) for vi in values]
 
         if close:
             self.database.close()
@@ -258,7 +296,7 @@ class Database(DicomReadable, Logger):
     def query(self, close=True, sort_by=None,
               partial_match=False, **kwargs):
         """ Query the table """
-        column_names = self.database.column_names(self.active_table)
+        column_names = self.database.column_names(self._active_table)
 
         for tag, value in kwargs.items():
             if not isinstance(value, str):
@@ -269,206 +307,103 @@ class Database(DicomReadable, Logger):
                 # work on json strings.
                 kwargs[tag] = json.dumps(value)
 
-        # perform query by super class
-        self.database.query(self.active_table, column_names=column_names,
+        self.database.query(self._active_table, column_names=column_names,
                                 close=close, sort_by=sort_by,
                                 partial_match=partial_match,
-                                new_table_name='QUERY_RESULT', **kwargs)
+                                destination_table=self._QUERY_RESULT, **kwargs)
         
-        self.active_table = 'QUERY_RESULT'
+        self._active_table = self._QUERY_RESULT
+        
+        self._clean()
+        return self
 
-#        # format result if any
-#        if columns:
-#            result = self._format_response(columns, column_names)
-#            result.SUV = self.SUV
-#            return result
-#        else:
-#            return columns
-
-    def _format_response(self, columns, column_names):
-        # return a dictionary with keys the filenames. Values are dicts
-        # comprised of the tag_name and tag_value
-
-        columns = list(zip(*columns))
-        columns = [list(col) for col in columns] # convert cols to list
-
-
-        for col in columns:
-            for j, value in enumerate(col):
-                if isinstance(value, str):
-                    col[j] = json.loads(value)
-        # return columns, column_names
-
-        #extract filenames
-        files = columns.pop(column_names.index(self.FILENAME_COL))
-        files = [os.path.join(self.folder, file) for file in files]
-
-        # construct metadata for each file
-        metadata = {}
-        for index, file in enumerate(files):
-            hdict = {} # tags for file
-
-            for name, col in zip(column_names, columns):
-                value = col[index] # select value in column for file
-
-                hdict[name] = value
-
-            # tags that are in this specific file
-            tag_names = hdict.pop(self.TAGNAMES_COL)
-
-            # remove tags that are not tags for this file
-            hdict = dict([(k, v) for k, v in hdict.items() if k in tag_names])
-            # enable indexing for tags including sub indexing sequences
-            hdict = Header.from_dict(hdict)
-            metadata[file] = hdict
-
-        metadata = DicomFiles(**metadata)
-        return metadata
-
-    def remove_file(self, file_name, close=True):
+    def _clean(self):
+        # remove dicom tag columns when the tag is not present in any of 
+        # the files in the active table
+        valid_columns_str = self.database.get_column(self._active_table, 
+                                                     self._TAGNAMES_COL,
+                                                     distinct=True)
+        valid_columns = [json.loads(col) for col in valid_columns_str]
+        valid_columns = set(itertools.chain(*valid_columns))
+        valid_columns = [*valid_columns, self._TAGNAMES_COL, self._FILENAME_COL]
+        
+        
+        active_columns = set(self.database.column_names(self._active_table))
+        
+        obsolete_columns = active_columns.difference(valid_columns)
+        self.logger.debug('Removing columns: ' + str(obsolete_columns))
+        for column in obsolete_columns:
+            self.database.delete_column(self._active_table, column)
+        
+        return obsolete_columns
+        
+    def _encode(self, header):
+        # pydicom header to dictionary with (json) encoded values
+        return Header.from_pydicom_header(header)
+    
+    def remove_files(self, file_names):
+        """ Remove file list from the database """
+        for file_name in file_names:
+            self.remove_file(file_name, close=False, clean = False)
+        
+        #self._clean()
+        
+        self.database.close()
+        
+    def remove_file(self, file_name, close=True, clean = True):
         """ Remove file from database """
-        self.database.delete_rows(self.MAIN_TABLE, column=self.FILENAME_COL,
+        self.database.delete_rows(self._MAIN_TABLE, column=self._FILENAME_COL,
                          value=json.dumps(file_name), close=False)
-
+        
+        self.database.delete_rows(self._FILENAME_TABLE, column=self._FILENAME_COL,
+                         value=json.dumps(file_name), close=False)
+        if clean:
+            self._clean()
+            
         if close:
             self.database.close()
-    @staticmethod
-    def _VM_for_tag(tag):
-        try:
-            VM = dicom.datadict.dictionaryVM(tag)
-        except AttributeError:
-            VM = dicom.datadict.dictionary_VM(tag)
-        return VM
-    @staticmethod
-    def _VR_for_tag(tag):
-        try:
-            VR = dicom.datadict.dictionaryVR(tag)
-        except AttributeError:
-            VR = dicom.datadict.dictionary_VR(tag)
-        return VR
-    def _add_column_for_tags(self, tag_names):
+        
+    def _add_column_for_tags(self, tag_names, skip_check = False):
         # add columns to the databse for the given tag_names
         # the sqlite datatype will be determined from the dicom value
         # representation in the datadict of pydicom
-
-        existing_columns = self.database.column_names(self.MAIN_TABLE, close=False)
+        if not skip_check:
+            existing_columns = self.database.column_names(self._MAIN_TABLE, 
+                                                          close=False)
+        else:
+            existing_columns = []
 
         for tag_name in tag_names:
             if tag_name not in existing_columns:
-                tag = dicom.datadict.tag_for_name(tag_name)
-
-                if tag is None:
-                    self.logger.info(('Error getting pydicom infor for {0}.'.format(tag_name),
-                                       ' Assuming values are text'))
-                    sqlite_type = self.database.TEXT
-                else:
-                    VM = self._VM_for_tag(tag)
-                    VR = self._VR_for_tag(tag)
-
-                    if VM == 1:
-                        sqlite_type = Database._sqlite_type_for_VR(VR)
-                    else:
-                        # multiple values are stored as json string
-                        sqlite_type = self.database.TEXT
-
-
-                self.database.add_column(self.MAIN_TABLE, tag_name, close=False,
-                                var_type=sqlite_type)
+                self.database.add_column(self._MAIN_TABLE, tag_name, 
+                                close=False, var_type=self.database.TEXT)
+    
+    def _count_tag(self, tagname):
+        if not hasattr(self, tagname):
+            count = 0
+        else:
+            len(getattr(self, tagname))
+        return count
+   
+    @property
+    def series_count(self):
+        return self._count_tag('SeriesInstanceUID')
+    @property
+    def study_count(self):
+        return self._count_tag('StudyInstanceUID')
+    @property
+    def patient_count(self):
+        return self._count_tag('PatientID')
+    
     @staticmethod
     def _chunks(iterable, chunksize):
         """Yield successive n-sized chunks from l."""
         for i in range(0, len(iterable), chunksize):
             yield iterable[i:i + chunksize]
 
-    @staticmethod
-    def _encode(header_dict):
-        """ convert to json """
-        encoded_dict = {}
-        for k, v in header_dict.items():
-            if not isinstance(v, (float, int)):
-                encoded_dict[k] = json.dumps(v)
-            else:
-                encoded_dict[k] = v
-        return encoded_dict
-
-    @staticmethod
-    def _sqlite_type_for_VR(VR):
-        # map dicom value representation to sqlite data type
-        if VR in VR_FLOAT:
-            return Database.REAL
-        elif VR in VR_INT:
-            return Database.INTEGER
-        else:
-            return Database.TEXT
-
-    @staticmethod
-    def _unique_list(l):
-        # Get Unique items in list while preserving ordering of elements
-        seen = set()
-        seen_add = seen.add
-
-        unique_list = [x for x in l if not (str(x) in seen or seen_add(str(x)))]
-
-        return unique_list
-
-class FileScanner(Logger):
-    
-    @staticmethod
-    def files_in_folder(dicom_dir, recursive=False):
-        """ Find all files in a folder, use recursive if files inside subdirs
-        should be included. """
-
-        # Walk through a folder and recursively list all files
-        if not recursive:
-            files = os.listdir(dicom_dir)
-        else:
-            files = []
-            for root, dirs, filenames in os.walk(dicom_dir):
-                for file in filenames:
-                    full_file = os.path.join(root, file)
-                    if os.path.isfile(full_file):
-                        files += [full_file]
-            # remove system specific files and the database file that
-            # start with '.'
-            files = [f for f in files if not os.path.split(f)[1][0] == '.']
-
-        return files
-    @staticmethod
-    def scan_files(dicom_dir, recursive=False, existing_files = []):
-        """ Find all files in folder and add dicom headers to database.
-        If overwrite is False, existing files in database will not be updated
-        """
-        
-        # recursively find all files in the folder
+ 
 
 
-        files = FileScanner.files_in_folder(dicom_dir, recursive=recursive)
-
-    
-
-        # extract relative path
-
-        files = [os.path.relpath(f, dicom_dir) for f in files]
-
-        # normalze path
-        files = [os.path.normpath(file) for file in files]
-       
-
-        #file names already in database
-       
-        # use sets for performance
-        files = set(files)
-        existing_files = set(existing_files)
-
-        # files that are in database but were not found in file folder
-        not_found = list(existing_files.difference(files))
-       
-
-        # files in path but not in database
-        new_files = list(files.difference(existing_files))
-       
-
-        return new_files, not_found
     
 if __name__ == "__main__":
-    database = Database(folder = 'C:/Users/757021/Data/HermesExport', rebuild = True)
+    database = Database(folder = 'C:/Users/757021/Data/Orthanc', rebuild=True, scan=False)
