@@ -6,11 +6,10 @@ Created on Tue Sep  5 16:54:20 2017
 import os
 
 import SimpleDicomToolkit
-import datetime
 import SimpleITK as sitk
 import dateutil
 import pydicom
-from dicom_parser import Parser
+
 
 class DicomReadable():
     """ Superclass for DicomFiles and DicomDatabaseSQL """
@@ -22,49 +21,19 @@ class DicomReadable():
 
     @property
     def headers(self):
-        """ Get pydicom headers from values in database. Pydicom headers 
-        are generated from database content. """
-        if len(self.files) > self.MAX_FILES:
-            print('Number of files exceeds MAX_FILES property')
-            raise IOError
-        
-        if self._headers is not None:
-            return self._headers
-        
-        if self.instance_count < 1:
-            self._headers = []
-            return self.headers
-        
-        headers = []
-        uids = self.SOPInstanceUID
-        if not isinstance(uids, list):
-            uids = [uids]
-       
-        headers = [self.header_for_uid(uid) for uid in uids]
-        
-        if len(headers) == 1:
-            headers = headers[0]
-            
-        self._headers = headers
-                
-        return self._headers
+        raise NotImplementedError
     
-    def header_for_uid(self, sopinstanceuid):
-        db = self.query(SOPInstanceUID = sopinstanceuid)
-        header_dict = {}
-        #return db.dicom_tag_names
-        for tag_name in db.dicom_tag_names:
-            value = db.get_column(tag_name, unique=True, sort=False, parse=False)[0]
-            #print(value)
-            header_dict[tag_name] = value
-        header = Parser.dataset_from_dict(header_dict)
-        return header
+    def get_header_for_uid(self):
+        raise NotImplementedError
             
     @property
     def files(self):
         """ List of dicom files that will be read to an image or images. """
         # must be implemented by subclass
         raise NotImplementedError
+    def reset(self):
+        self._image = None
+        self._images = None
     
     @property
     def image(self):
@@ -87,10 +56,10 @@ class DicomReadable():
             self.logger.error('Slice Sorting Failed Before Reading!')
             sort_by = None
             
-        to_read = self.query(SeriesInstanceUID=series_uid, sort_by=sort_by)
+        to_read = self.query(SeriesInstanceUID=series_uid, sort_by=sort_by, 
+                             sort_decimal=True)
         
-        image = read_serie(to_read.files, SUV=False, 
-                           issorted=True, folder=to_read.folder)
+        image = _read_serie(to_read.files, SUV=False, folder=to_read.folder)
  
         # get first uid from file
         uid = self.SOPInstanceUID
@@ -101,7 +70,7 @@ class DicomReadable():
         
         # calculate suv scale factor
         try:
-            bqml_to_suv = suv_scale_factor(header)
+            bqml_to_suv = _suv_scale_factor(header)
         except:
             if self.SUV:
                 raise
@@ -109,8 +78,9 @@ class DicomReadable():
         if self.SUV:
             image *= bqml_to_suv
         
-        image.bqml_to_suv = bqml_to_suv
-        return image
+            image.bqml_to_suv = bqml_to_suv
+        self._image = image
+        return self._image
 
     @property
     def images(self):
@@ -137,10 +107,13 @@ class DicomReadable():
         self._images = images
         return self._images
 
-    
+
+def folder_to_image(folder):
+    if not isinstance(folder, (list, tuple)):
+        file_list = [file_list]
 
 
-def read_files(file_list):
+def _read_files(file_list):
     """ Read a file or list of files using SimpleTIK. A file list will be
          read as an image series in SimpleITK. """
     if len(file_list) == 1:
@@ -162,7 +135,7 @@ def read_files(file_list):
     return image
 
 
-def read_serie(files, rescale=True, SUV=False, issorted = False, folder=None):
+def _read_serie(files, rescale=True, SUV=False, folder=None):
     """ Read a single image serie from a dicom database to SimpleITK images.
 
         series_uid: Define the SeriesInstanceUID to be read from the database.
@@ -172,31 +145,22 @@ def read_serie(files, rescale=True, SUV=False, issorted = False, folder=None):
 
         split_acquisitions: Returns seperate images for each acquisition number.
         """
-    if not(issorted) and len(files) > 1:
-        raise ImportError
     
     if folder is not None:
         files = [os.path.join(folder, file) for file in files]
 
-    image = read_files(files)
-
-#    if rescale:
-#        print('Rescaling image')
-#        slope, intercept = rescale_values(dicom_files)
-#        image *= slope
-#        image += intercept
-
+    image = _read_files(files)
 
     # calculate and add a SUV scaling factor for PET.
     if SUV:
-        factor = suv_scale_factor(pydicom.read_file(files[0], 
+        factor = _suv_scale_factor(pydicom.read_file(files[0], 
                                                     stop_before_pixels=True))
         image *= factor
         image.BQML_TO_SUV = factor
         image.SUB_TO_BQML = 1/factor
     return image
 
-def suv_scale_factor(header):
+def _suv_scale_factor(header):
     """ Calculate the SUV scaling factor (Bq/cc --> SUV) based on information
     in the header. Works on Siemens PET Dicom Headers. """
 
@@ -205,14 +169,16 @@ def suv_scale_factor(header):
     nuclide_info   = header.RadiopharmaceuticalInformationSequence[0]
     
     parse = lambda x: dateutil.parser.parse(x)
-    series_date = parse(header.SeriesDate).date()
-    series_time = parse(header.SeriesTime).time()
-    injection_time = parse(nuclide_info.RadiopharmaceuticalStartTime).time()
+    series_datetime_str = header.SeriesDate + ' ' + header.SeriesTime
+    series_dt = parse(series_datetime_str)
+    
+    injection_time = nuclide_info.RadiopharmaceuticalStartTime
+                         
+    injection_datetime_str = header.SeriesDate + ' ' + injection_time
+    injection_dt = parse(injection_datetime_str)
     
     nuclide_dose   = float(nuclide_info.RadionuclideTotalDose)
     
-    series_dt      = datetime.datetime.combine(series_date, series_time)
-    injection_dt   = datetime.datetime.combine(series_date, injection_time)
 
 
     half_life      = float(nuclide_info.RadionuclideHalfLife)
@@ -228,7 +194,7 @@ def suv_scale_factor(header):
     return suv_scaling
 
 
-def rescale_values(header=None):
+def _rescale_values(header=None):
     """ Return rescale slope and intercept if they are in the dicom headers,
     otherwise 1 is returned for slope and 0 for intercept. """
     # apply rescale slope and intercept to the image

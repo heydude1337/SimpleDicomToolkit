@@ -42,10 +42,20 @@ class SQLiteWrapper(Logger):
         self.connected = False # self.connect() needs this attribute
         self.connection = None # Databse connection
         self.cursor = None # Database cursor
+        self._row_factory = None
 
         self.close()
-
-
+    @property
+    def row_factory(self):
+        return self._row_factory
+    
+    @row_factory.setter
+    def row_factory(self, factory):
+        self._row_factory = factory
+        if self.connected:
+            self.connection.row_factory = self._row_factory
+            self.cursor = self.connecion.cursor()
+        
     def execute(self, sql_query, values=None, close=True, fetch_all=False, debug=False):
         """ Execute a sql query, database connection is opened when not
         already connected. Connection  will be closed based on the close flag.
@@ -53,7 +63,7 @@ class SQLiteWrapper(Logger):
         """
 
         self.connect()
-
+        
         self.logger.debug(sql_query)
         try:
             if values is None:
@@ -112,9 +122,11 @@ class SQLiteWrapper(Logger):
         if close:
             self.close()
 
-    def rename_table(self, source_name, destination_name, close=True):
+    def rename_table(self, source_name, destination_name, 
+                     overwrite=True, close=True):
         """ Rename Table """
-
+        if overwrite:
+            self.delete_table(destination_name)
         cmd = 'ALTER TABLE {source_name} RENAME TO {destination_name}'
         self.execute(cmd.format(source_name=source_name,
                                  destination_name=destination_name),
@@ -173,7 +185,7 @@ class SQLiteWrapper(Logger):
 
 
     def get_column(self, table_name, column_name, 
-                   close=True, sort=True, distinct=True):
+                   close=True, sort=False, distinct=True):
         """ Return column values from table """
 
         if distinct:
@@ -194,7 +206,9 @@ class SQLiteWrapper(Logger):
         return result
 
     def query(self, source_table, destination_table = None, column_names=None,
-               close=True, sort_by=None, partial_match=False, **kwargs):
+               close=True, sort_by=None, partial_match=False, 
+               row_factory = None, print_query=False, sort_decimal=False,
+               **kwargs):
         """ Perform a query on a table. E.g.:
             database.query(city = 'Rotterdam',
                            street = 'Blaak') returns all rows where column
@@ -202,40 +216,68 @@ class SQLiteWrapper(Logger):
 
             columns specifies which columns will be returned.
         """
+        TEMP_TABLE = 'temp_query_table'
+        query = ('{create_table} SELECT {columns} FROM {source_table} '
+                '{where_clause} {order_q}')
+        
+        if destination_table is None:
+            create_table = ''
+        else:
+            self.delete_table(TEMP_TABLE)
+            create_table = 'CREATE TABLE {destination_table} AS ' 
+            create_table = create_table.format(destination_table=TEMP_TABLE)
+            
         if column_names is None:
             # if columns are None assume values for every column are passes
-            column_str = '*'
+            columns = '*'
         else:
-            column_str = SQLiteWrapper.list_to_string(column_names)
+            columns = SQLiteWrapper.list_to_string(column_names)
 
-        query = 'SELECT {columns} FROM {source_table} WHERE '
-
-        query = query.format(source_table=source_table, columns=column_str)
-
-        if destination_table is not None:
-            self.delete_table(destination_table)
-            query = 'CREATE TABLE {destination_table} AS ' + query
-            query = query.format(destination_table=destination_table)
-
-        # append multiple conditions
-        for col_name in kwargs.keys():
-            if not partial_match:
-                query += '{col_name}=? AND '.format(col_name=col_name)
+        
+        if len(kwargs) == 0:
+            where_clause = ''
+        else:
+            where_clause = 'WHERE '
+            # append multiple conditions
+            for col_name in kwargs.keys():
+                if not partial_match:
+                    clause = '{col_name}=? AND '
+                else:
+                    clause =  '{col_name} LIKE ? AND '
+                    
+                where_clause += clause.format(col_name=col_name) 
+            where_clause = where_clause[:-4]  # remove last AND from string
+                
+        if sort_by is None:
+            order_q = ''
+        else: 
+            if sort_decimal is True:
+                order_q = ' ORDER BY CAST({0} AS DECIMAL)'
             else:
-                query += '{col_name} LIKE ? AND '.format(col_name=col_name)
-
-        query = query[:-4]  # remove last AND from string
-
-        if sort_by is not None:
-            query += ' ORDER BY {0}'.format(sort_by)
+                order_q = ' ORDER BY {0}'
+            order_q = order_q.format(sort_by)
 
         values = list(kwargs.values())
 
         if partial_match:
             values = ['%{}%'.format(value) for value in values]
 
-        result = self.execute(query, values=values, fetch_all=True, close=close)
-
+        if row_factory is not None:
+            self.row_factory = row_factory
+            
+        query = query.format(create_table=create_table, columns=columns,
+                    source_table=source_table, where_clause=where_clause,
+                    order_q=order_q)    
+        
+        if print_query:
+            print(query)
+            
+        result = self.execute(query, values=values, fetch_all=True, 
+                              close=close)
+        
+        if destination_table is not None:
+             self.rename_table(TEMP_TABLE, destination_table)
+             
         return result
 
 
@@ -283,7 +325,18 @@ class SQLiteWrapper(Logger):
 
         self.close(close)
 
-
+    def get_row_dict(self, *args, **kwargs):
+        def dict_factory(cursor, row):
+            d = {}
+            for idx, col in enumerate(cursor.description):
+                d[col[0]] = row[idx]
+            return d
+         
+        row_factory = dict_factory
+        result = self.query(*args, row_factory=row_factory, **kwargs)
+        self.row_factory = None
+        return result
+    
     def insert_row_dict(self, table_name, data_dict, close=True):
         """ Insert a dictionary in the table. Dictionary must be as follows:
             datadict = {city: ['Rotterdam, 'Amsterdam',..],
@@ -309,9 +362,11 @@ class SQLiteWrapper(Logger):
         if not self.connected:
             try:
                 self.connection = lite.connect(self.database_file)
+                
             except lite.OperationalError:
                 self.logger.error('Could not connect to {0}'.format(self.database_file))
                 raise
+            self.connection.row_factory = self.row_factory
             self.cursor = self.connection.cursor()
             self.connected = True
             if self._LOG_LEVEL == logging.DEBUG:

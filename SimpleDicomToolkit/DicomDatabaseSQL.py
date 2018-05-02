@@ -17,7 +17,7 @@ import itertools
 from SimpleDicomToolkit import Logger, FileScanner
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper
 from SimpleDicomToolkit.progress_bar import progress_bar
-from SimpleDicomToolkit.read_dicom import DicomReadable
+from SimpleDicomToolkit.dicom_reader import DicomReadable
 from SimpleDicomToolkit.dicom_parser import Parser, Header 
 
 
@@ -38,7 +38,7 @@ class Database(DicomReadable, Logger):
     _LOG_LEVEL       = logging.INFO
 
     def __init__(self, folder=None, rebuild=False, scan=True, silent=False, 
-        SUV = True):
+        SUV = True, in_memory, file_list = None):
         """ Create a dicom database from folder
 
             rebuild: Deletes the database file and generates a new database
@@ -49,36 +49,40 @@ class Database(DicomReadable, Logger):
         """
         self.SUV = SUV
         self.__active_table = None
+        self.database_file = None
         
         if silent:
             self._LOG_LEVEL = logging.ERROR
-            
-        self.database_file = os.path.join(folder, Database._DATABASE_FILE)
-
-        self.folder = os.path.abspath(folder)
-
-        if rebuild and os.path.exists(self.database_file):
+        if in_memory:
+            self.database_file = SQLiteWrapper.IN_MEMORY
+        elif folder is not None:
+            self.folder = os.path.abspath(folder) # None returns cwd
+            self.database_file = os.path.join(self.folder, 
+                                              Database._DATABASE_FILE)
+        
+        
+        if rebuild and not in_memory and os.path.exists(self.database_file):
             os.remove(self.database_file)
             scan = True
-        
-        if self.folder is not None:
+        if self.database_file is not None:
             self._init_database()
-        
-        if scan:
-            self._update_db()
+            if scan:
+                self._update_db(file_list=file_list, silent=silent)
     
     @property
     def files(self):
         """ Retrieve all dicom files with  path from the database """
         return self.database.get_column(self._active_table, 
                                         self._FILENAME_COL, 
+                                        sort=False,
                                         close=True)
     @property
     def _files(self):
         """ Retrieve all files with path from the database """
         dicom_files = self.files
         non_dicom_files = self.database.get_column(self._FILENAME_TABLE, 
-                                        self._FILENAME_COL, 
+                                        self._FILENAME_COL,
+                                        sort=False,
                                         close=True)
         return [*dicom_files, *non_dicom_files]
     
@@ -109,13 +113,64 @@ class Database(DicomReadable, Logger):
     
     @property
     def headers(self):
-        if len(self) > self._chunk_size:
-            raise IndexError('Database too big to generate headers')
+        """ Get pydicom headers from values in database. Pydicom headers 
+        are generated from database content. """
+        if len(self.files) > self.MAX_FILES:
+            msg = 'Number of files exceeds MAX_FILES property'
+            raise IOError(msg)
+        
+        if self._headers is not None:
+            return self._headers
+        
+        if len(self) < 1:
+            self._headers = []
+            return self.headers
+        
+        headers = []
+        uids = self.SOPInstanceUID
+        if not isinstance(uids, list):
+            uids = [uids]
+       
+        headers = [self.header_for_uid(uid) for uid in uids]
+        
+        if len(headers) == 1:
+            headers = headers[0]
+            
+        self._headers = headers
+                
+        return self._headers
+    @property
+    def header(self):
+        headers = self.headers
+        if len(headers) == 0:
+            return None
+        elif len(headers) > 1:
+            raise IndexError('Mulitple Instances Found')
+        else:
+            return headers[0]
+        
+    def header_for_uid(self, sopinstanceuid):
+        sopinstanceuid = Parser.encode_value_with_tagname('SOPInstanceUID',
+                                                          sopinstanceuid)
+        h_dicts = self.database.get_row_dict(self._active_table, 
+                                             SOPInstanceUID=sopinstanceuid)
+        if len(h_dicts) == 0:
+            msg = 'SOPInstanceUID {0} not in database'
+            self.logger.info(msg.format(sopinstanceuid))
+        elif len(h_dicts) > 1:
+            msg = 'SOPInstanceUID {0} not unique'
+            raise ValueError(msg.format(sopinstanceuid))
+        h_dict = h_dicts[0]
+        [h_dict.pop(key) for key in (self._FILENAME_COL, self._TAGNAMES_COL)]
+        return self._decode(h_dict)
         
     def reset(self):
         """ After a query a subset of the database is visible, use reset
         to make all data visible again. """
         self._active_table = self._MAIN_TABLE
+        self._headers = None
+        super().reset()
+        return self
         
     def _init_database(self):
         # make connection to the database and make columns if they don't exist
@@ -126,6 +181,7 @@ class Database(DicomReadable, Logger):
         self.database.connect()
         self._create_main_table() # create empty table if not exists
         self._create_file_table()
+        self._headers = None
         self.database.close()
 
     def _create_file_table(self):
@@ -156,11 +212,15 @@ class Database(DicomReadable, Logger):
 
    
 
-    def _update_db(self, silent=False):
+    def _update_db(self, silent=False, new_files=None):
         # scan for file new and removed files in the folder. Update the
         # database with new files, remove files that are no longer in folder
-        new_files, not_found = FileScanner.scan_files(self.folder, 
-                                recursive=True, existing_files=self._files)
+        if not new_files:
+            new_files, not_found = FileScanner.scan_files(self.folder, 
+                recursive=True, existing_files=self._files)
+        else:
+            not_found = []
+            
         # handle files that were not found
        
         self.remove_files(not_found)
@@ -242,8 +302,8 @@ class Database(DicomReadable, Logger):
             self.database.insert_row_dict(self._MAIN_TABLE, hdict,
                                  close=close)
         except:
-            print('Could not insert file: {0}'.format(file))
-            raise
+            msg = ('Could not insert file: {0}'.format(file))
+            raise IOError(msg)
 
         if close:
             self.database.close()
@@ -259,15 +319,14 @@ class Database(DicomReadable, Logger):
 
     def __getattr__(self, attr):
         # enable dicom tags as attributes (default pydicom behaviour)
-        if attr in self.database.column_names(self._MAIN_TABLE):
+        if attr in self.database.column_names(self._active_table):
             values = self.get_column(attr, parse=True)
 
             if len(values) == 1:
                 return values[0]
         else:
-            # print(attr + ' not valid!')
             raise AttributeError(attr)
-        # self.logger.info(attr + ' ' + str(values))
+   
 
         return values
 
@@ -281,20 +340,20 @@ class Database(DicomReadable, Logger):
         return self.__str__()
 
     def get_column(self, column_name, distinct=True,
-                   sort=True, close=True, parse=True):
+                   sort=False, close=True, parse=True):
         """ Return the unique values for a column with column_name """
         values = self.database.get_column(self._active_table, column_name,
                                     sort=sort, distinct=distinct, close=False)
 
         if parse:
-            values = [Parser.decode_entry(column_name, vi) for vi in values]
+            values = [Parser.decode_entry(column_name, vi)[0] for vi in values]
 
         if close:
             self.database.close()
         return values
 
     def query(self, close=True, sort_by=None,
-              partial_match=False, **kwargs):
+              partial_match=False, sort_decimal=False, **kwargs):
         """ Query the table """
         column_names = self.database.column_names(self._active_table)
 
@@ -308,7 +367,8 @@ class Database(DicomReadable, Logger):
                 kwargs[tag] = json.dumps(value)
 
         self.database.query(self._active_table, column_names=column_names,
-                                close=close, sort_by=sort_by,
+                                close=close, sort_by=sort_by, 
+                                sort_decimal=sort_decimal,
                                 partial_match=partial_match,
                                 destination_table=self._QUERY_RESULT, **kwargs)
         
@@ -340,23 +400,29 @@ class Database(DicomReadable, Logger):
     def _encode(self, header):
         # pydicom header to dictionary with (json) encoded values
         return Header.from_pydicom_header(header)
+    def _decode(self, hdict):
+        return Parser.decode(hdict)
     
     def remove_files(self, file_names):
         """ Remove file list from the database """
         for file_name in file_names:
             self.remove_file(file_name, close=False, clean = False)
         
-        #self._clean()
+        self._clean()
         
         self.database.close()
         
     def remove_file(self, file_name, close=True, clean = True):
         """ Remove file from database """
+        if self.__active_table is not self._MAIN_TABLE:
+            msg = ('Removing files cannot be done after query, please use '
+                   'reset() to undo query selection.')
+            raise RuntimeError(msg)
         self.database.delete_rows(self._MAIN_TABLE, column=self._FILENAME_COL,
-                         value=json.dumps(file_name), close=False)
+                         value=file_name, close=False)
         
         self.database.delete_rows(self._FILENAME_TABLE, column=self._FILENAME_COL,
-                         value=json.dumps(file_name), close=False)
+                         value=file_name, close=False)
         if clean:
             self._clean()
             
@@ -381,8 +447,11 @@ class Database(DicomReadable, Logger):
     def _count_tag(self, tagname):
         if not hasattr(self, tagname):
             count = 0
+        values = getattr(self, tagname)
+        if not isinstance(values, (list, tuple)):
+            count = 1
         else:
-            len(getattr(self, tagname))
+            count = len(values)
         return count
    
     @property
@@ -402,8 +471,11 @@ class Database(DicomReadable, Logger):
             yield iterable[i:i + chunksize]
 
  
-
-
-    
 if __name__ == "__main__":
-    database = Database(folder = 'C:/Users/757021/Data/Orthanc', rebuild=True, scan=False)
+    pass
+#    database = Database(folder = 'C:/Users/757021/Data/Orthanc', rebuild=False, scan=False)
+#    print(len(database))
+#    database.remove_file(database.files[0])
+#    print(len(database))
+#    database._update_db()
+#    print(len(database))
