@@ -6,14 +6,10 @@ Created on Tue Sep  5 16:54:20 2017
 """
 import os
 import json
-
-try:
-    import pydicom as dicom
-except ImportError:
-    import dicom
-
+import pydicom
 import logging
 import itertools
+
 from SimpleDicomToolkit import Logger, FileScanner
 from SimpleDicomToolkit.SQLiteWrapper import SQLiteWrapper
 from SimpleDicomToolkit.progress_bar import progress_bar
@@ -34,15 +30,15 @@ class Database(DicomReadable, Logger):
     _QUERY_RESULT    = 'QueryResultTable' # stores queries
     
     _chunk_size     = 1000  # number of files to read before committing
-    _folder         = None
+    _path         = None
     _LOG_LEVEL       = logging.INFO
 
-    def __init__(self, folder=None, rebuild=False, scan=True, silent=False, 
-        SUV = True, in_memory, file_list = None):
-        """ Create a dicom database from folder
+    def __init__(self, path=None, rebuild=False, scan=True, silent=False, 
+        SUV = True, in_memory=False, database_file=None):
+        """ Create a dicom database from path
 
             rebuild: Deletes the database file and generates a new database
-            scan:    Scans for all dicom files in the folder and updates
+            scan:    Scans for all dicom files in the path and updates
                      the database. Missing files will be removed as well
             silent:  Supress progressbar and log messages except errors
 
@@ -50,24 +46,48 @@ class Database(DicomReadable, Logger):
         self.SUV = SUV
         self.__active_table = None
         self.database_file = None
+        self.path = None
+        self._selection = {} # keep track of nested queries
+        files = None
         
         if silent:
             self._LOG_LEVEL = logging.ERROR
-        if in_memory:
-            self.database_file = SQLiteWrapper.IN_MEMORY
-        elif folder is not None:
-            self.folder = os.path.abspath(folder) # None returns cwd
-            self.database_file = os.path.join(self.folder, 
-                                              Database._DATABASE_FILE)
+            
         
-        
+            
+        # database file name
+        if database_file:
+            self.database_file = database_file
+        else:
+            if in_memory:
+                self.database_file = SQLiteWrapper.IN_MEMORY
+            elif isinstance(path, str) and os.path.isdir(path):
+                self.database_file = os.path.join(path, 
+                                                  Database._DATABASE_FILE)
+            else:
+                self.database_file = os.path.join(os.getcwd(), 
+                                                  Database._DATABASE_FILE)
         if rebuild and not in_memory and os.path.exists(self.database_file):
             os.remove(self.database_file)
-            scan = True
-        if self.database_file is not None:
-            self._init_database()
+        self._init_database()
+       
+        # gather file list
+        if isinstance(path, str) and os.path.isdir(path):            
+            self.path = os.path.abspath(path)
             if scan:
-                self._update_db(file_list=file_list, silent=silent)
+                files = FileScanner.files_in_folder(path, recursive=True)
+            else:
+                files = self.files # skip scanning for new files
+        elif isinstance(path, (list, tuple)):
+            files = path
+        elif os.path.isfile(path):
+            files = [path]
+            
+        
+       
+        
+        if scan:
+            self._update_db(files=files, silent=silent)
     
     @property
     def files(self):
@@ -169,6 +189,7 @@ class Database(DicomReadable, Logger):
         to make all data visible again. """
         self._active_table = self._MAIN_TABLE
         self._headers = None
+        self._selection = {} # reset nested queries
         super().reset()
         return self
         
@@ -176,7 +197,7 @@ class Database(DicomReadable, Logger):
         # make connection to the database and make columns if they don't exist
         self.database = SQLiteWrapper(database_file=self.database_file)
         self.database._LOG_LEVEL = self._LOG_LEVEL
-        self.logger.info('Root folder: %s', self.folder)
+        self.logger.info('Root path: %s', self.path)
         self.logger.info('Databsase file: %s', self.database.database_file)
         self.database.connect()
         self._create_main_table() # create empty table if not exists
@@ -211,15 +232,20 @@ class Database(DicomReadable, Logger):
         self.database.execute(cmd)
 
    
-
-    def _update_db(self, silent=False, new_files=None):
-        # scan for file new and removed files in the folder. Update the
-        # database with new files, remove files that are no longer in folder
-        if not new_files:
-            new_files, not_found = FileScanner.scan_files(self.folder, 
-                recursive=True, existing_files=self._files)
+    def scan(self):
+        if self.path:
+            files = FileScanner.files_in_folder(self.path, recursive=True)
+            self._update_db(files)
         else:
-            not_found = []
+            raise RuntimeError('No path specified')
+            
+    def _update_db(self, files= [], silent=False):
+        # scan for file new and removed files in the path. Update the
+        # database with new files, remove files that are no longer in path
+        if files is None:
+            return
+        existing_files = self._files
+        new_files, not_found = FileScanner.compare(files, existing_files)
             
         # handle files that were not found
        
@@ -253,11 +279,12 @@ class Database(DicomReadable, Logger):
 
                 # insert file and keep track of newly create columns without
                 # additional database queries
+                
                 try:
                     new_columns = self.insert_file(file,
                                 _existing_column_names=columns, close=False)
                                                
-                except dicom.errors.InvalidDicomError:
+                except pydicom.errors.InvalidDicomError:
                     # list file as non dicom
                     self.database.insert_list(self._FILENAME_TABLE, file,
                                       column_names = self._FILENAME_COL,
@@ -281,9 +308,9 @@ class Database(DicomReadable, Logger):
                                                        close=False)
 
         # read file from disk
-        fullfile = os.path.join(self.folder, file)
+        fullfile = os.path.join(self.path, file)
      
-        header = dicom.read_file(fullfile, stop_before_pixels=True)
+        header = pydicom.read_file(fullfile, stop_before_pixels=True)
 
 
         # convert header to dictionary
@@ -334,7 +361,12 @@ class Database(DicomReadable, Logger):
         return len(self.files)
 
     def __str__(self):
-        return 'Database with {0} files'.format(len(self))
+        msg = 'Database with {0} files'.format(len(self))
+        if self._selection:
+            msg += '\nSelection:'
+            for key, value in self._selection.items():
+                msg += '\n{0}:\t{1}'.format(key, value)
+        return msg
 
     def __repr__(self):
         return self.__str__()
@@ -353,10 +385,11 @@ class Database(DicomReadable, Logger):
         return values
 
     def query(self, close=True, sort_by=None,
-              partial_match=False, sort_decimal=False, **kwargs):
+              partial_match=False, sort_decimal=False, clean=True, **kwargs):
         """ Query the table """
         column_names = self.database.column_names(self._active_table)
-
+        
+        self._selection = {**self._selection, **kwargs} # keep track of nested query
         for tag, value in kwargs.items():
             if not isinstance(value, str):
                 value = str(value)
@@ -373,8 +406,9 @@ class Database(DicomReadable, Logger):
                                 destination_table=self._QUERY_RESULT, **kwargs)
         
         self._active_table = self._QUERY_RESULT
+        if clean:
+            self._clean()
         
-        self._clean()
         return self
 
     def _clean(self):
@@ -445,9 +479,10 @@ class Database(DicomReadable, Logger):
                                 close=False, var_type=self.database.TEXT)
     
     def _count_tag(self, tagname):
-        if not hasattr(self, tagname):
-            count = 0
-        values = getattr(self, tagname)
+        try:
+            values = getattr(self, tagname)
+        except AttributeError:
+            values = [] 
         if not isinstance(values, (list, tuple)):
             count = 1
         else:
@@ -472,10 +507,6 @@ class Database(DicomReadable, Logger):
 
  
 if __name__ == "__main__":
-    pass
-#    database = Database(folder = 'C:/Users/757021/Data/Orthanc', rebuild=False, scan=False)
-#    print(len(database))
-#    database.remove_file(database.files[0])
-#    print(len(database))
-#    database._update_db()
-#    print(len(database))
+
+    database = Database(path = 'C:/Users/757021/Data/Orthanc', rebuild=False, scan=False)
+    

@@ -4,16 +4,17 @@ from SimpleDicomToolkit import Logger
 class FileScanner(Logger):
     
     @staticmethod
-    def files_in_folder(dicom_dir, recursive=False):
+    def files_in_folder(folder, recursive=False, absolute_path=False):
         """ Find all files in a folder, use recursive if files inside subdirs
         should be included. """
 
         # Walk through a folder and recursively list all files
         if not recursive:
-            files = os.listdir(dicom_dir)
+            files = [os.path.join(folder, file) for file in os.listdir(folder)\
+                     if os.path.isfile(file)]
         else:
             files = []
-            for root, dirs, filenames in os.walk(dicom_dir):
+            for root, dirs, filenames in os.walk(folder):
                 for file in filenames:
                     full_file = os.path.join(root, file)
                     if os.path.isfile(full_file):
@@ -21,23 +22,20 @@ class FileScanner(Logger):
             # remove system specific files and the database file that
             # start with '.'
             files = [f for f in files if not os.path.split(f)[1][0] == '.']
-
-        return files
-    @staticmethod
-    def scan_files(dicom_dir, recursive=False, existing_files = []):
-        """ Find all files in folder and add dicom headers to database.
-        If overwrite is False, existing files in database will not be updated
-        """
         
-        # recursively find all files in the folder
-        files = FileScanner.files_in_folder(dicom_dir, recursive=recursive)
-
         # extract relative path
-        files = [os.path.relpath(f, dicom_dir) for f in files]
+        if absolute_path:
+            files = [os.path.abspath(f) for f in files]
+        else:
+            files = [os.path.relpath(f, folder) for f in files]
 
         # normalze path
         files = [os.path.normpath(file) for file in files]   
-       
+
+        return files
+
+    @staticmethod
+    def compare(files, existing_files):
         # use sets for performance
         files = set(files)
         existing_files = set(existing_files)

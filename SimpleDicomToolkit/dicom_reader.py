@@ -59,7 +59,7 @@ class DicomReadable():
         to_read = self.query(SeriesInstanceUID=series_uid, sort_by=sort_by, 
                              sort_decimal=True)
         
-        image = _read_serie(to_read.files, SUV=False, folder=to_read.folder)
+        image = _read_serie(to_read.files, SUV=False, folder=to_read.path)
  
         # get first uid from file
         uid = self.SOPInstanceUID
@@ -106,11 +106,35 @@ class DicomReadable():
         
         self._images = images
         return self._images
+    
+    def array(self):
+        return sitk.GetArrayFromImage(self.image)
+    
+    def arrays(self):
+        return dict([(key, sitk.GetArrayFromImage(image)) \
+                     for key, image in self.images.items()])
 
+def sitk_image(path):
+    """ Get SITK image from dicom file(s) containing a single dicom series. 
+    Path may be a folder, file or list of files """
+    return SimpleDicomToolkit.Database(path, in_memory=True).image
 
-def folder_to_image(folder):
-    if not isinstance(folder, (list, tuple)):
-        file_list = [file_list]
+def sitk_images(path):
+    """ Get SITK images from dicom file(s) containing one or more dicom series. 
+    Path may be a folder, file or list of files. A dictionary is returned with
+    keys the SeriesInstanceUID and has sitk images as values. """
+    return SimpleDicomToolkit.Database(path, in_memory=True).images
+
+def numpy_array(path):
+    """ Get numpy array from dicom file(s) containing a single dicom series. 
+    Path may be a folder, file or list of files """
+    return SimpleDicomToolkit.Database(path, in_memory=True).array
+
+def numpy_arrays(path):
+    """ Get numpy arrays from dicom file(s) containing one or more dicom series. 
+    Path may be a folder, file or list of files. A dictionary is returned with
+    keys the SeriesInstanceUID and has numpy arrays as values. """
+    return SimpleDicomToolkit.Database(path, in_memory=True).arrays
 
 
 def _read_files(file_list):
