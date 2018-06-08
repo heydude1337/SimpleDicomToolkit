@@ -9,7 +9,8 @@ import pydicom
 import json
 from SimpleDicomToolkit.logger import Logger
 import logging
-
+import dateutil
+from datetime import datetime, timedelta
 
 
 logger = Logger(app_name = 'dicom_parser', log_level = logging.ERROR).logger
@@ -61,7 +62,8 @@ class Parser():
     _PRIVATE_TAG_PREFIX = 'private_tag_'
     _PRIVATE_TAG_NAME = _PRIVATE_TAG_PREFIX + '{group}_{element}_{VR}'
 
-
+    DT_NULL = datetime(1800,1,1)
+    TM_NULL = -1
     @property
     def dictionary_tag(self):
         """ Complementary to the pydicom.datadict functions. Dictionary
@@ -101,8 +103,11 @@ class Parser():
             if skip_private_tags and tag.is_private:
                 # skip private tags
                 continue
-
-            name, value = Parser.encocode_element(element, skip_private_tags)
+            try:                
+                name, value = Parser.encocode_element(element, skip_private_tags)
+            except:
+                print('Cannot encode {0}'.format(element))
+                 
 
             dicom_dict[name] = value
 
@@ -120,8 +125,9 @@ class Parser():
 
     @staticmethod
     def encode_value_with_tagname(tagname, value):
-        # TO DO, used to format values used in a query.
-        return json.dumps(value)
+        _, VR = Parser._decode_tagname(tagname)
+        
+        return Parser._convert_value(value, VR)
 
     @staticmethod
     def _encode_tagname(element):
@@ -141,6 +147,7 @@ class Parser():
     @staticmethod
     def _encode_value(element, skip_private_tags):
         # encode the value of a pydicom element to a json string
+        vr = element.VR
         if isinstance(element.value, pydicom.sequence.Sequence):
             # iterate over sequences each element of a sequence is a dataset
             values = []
@@ -150,31 +157,55 @@ class Parser():
 
         else:
             if isinstance(element.value, pydicom.multival.MultiValue):
-                # convert to list before dump
-                value = json.dumps([vi for vi in element.value])
-            elif isinstance(element.value, pydicom.valuerep.PersonName3):
-                # special treatment of person names
-                value = json.dumps(element.value.original_string)
-            elif isinstance(element.value, bytes):
-                # bytes are converted to hex string
-                value = json.dumps(element.value.hex())
-            elif not isinstance(element.value, (int, float)):
-                value = json.dumps(element.value)
-            elif isinstance(element.value, pydicom.tag.BaseTag):
-                # TO DO
-                value = json.dumps(element.value.real)
+                # convert to list before converting elements in list
+                
+                value = json.dumps([Parser._convert_value(vi, VR=vr)\
+                                    for vi in element.value])
+           
             else:
-                value = element.value
+                value = Parser._convert_value(element.value, VR=vr)
         return value
-
+    
+    @staticmethod
+    def _convert_value(value, VR=''):
+        if isinstance(value, pydicom.valuerep.PersonName3):
+            # special treatment of person names
+            value = json.dumps(value.original_string)
+        elif VR == 'DA':
+                value = Parser.unix_time(value)
+        elif VR == 'DT':
+            value = Parser.unix_time(value)
+        elif VR == 'TM':
+            if value == '':
+                return Parser.TM_NULL
+            elif '.' in value:
+                value = datetime.strptime(value, '%H%M%S.%f')
+            else:
+                value = datetime.strptime(value, '%H%M%S')
+            epoch = datetime.utcfromtimestamp(0)
+            value = datetime.combine(epoch.date(), value.time())
+            value = Parser.unix_time_millis(value)
+        elif isinstance(value, bytes):
+            # bytes are converted to hex string
+            value = json.dumps(value.hex())
+        elif not isinstance(value, (int, float)):
+            value = json.dumps(value)
+        elif isinstance(value, pydicom.tag.BaseTag):
+            # TO DO
+            value = json.dumps(value.real)
+        return value
+    
     @staticmethod
     def decode(header_dict):
         """ Convert dictionary to pydicom dataset. """
         ds = pydicom.Dataset()
         for tagname, repval in header_dict.items():
             value, tag, vr = Parser.decode_entry(tagname, repval)
-            ds.add_new(tag, vr, value)
-
+            try:
+                ds.add_new(tag, vr, value)
+            except:
+                print('Cannot add tag {0} with value {1} and VR {2}'.format(tag, value, vr))
+            print(tagname, value)
             if  ds[tag].VR == 'US or SS' and isinstance(value, int):
                 ds[tag].VR = 'US' # force int to prevent invalid header
 
@@ -185,8 +216,14 @@ class Parser():
 
     @staticmethod
     def decode_entry(tagname, value):
+        if isinstance(value, (list, tuple)):
+            return [Parser.decode_entry(tagname, vi) for vi in value]
         tag, vr = Parser._decode_tagname(tagname)
-        value = Parser._decode_value(value, VR=vr)
+        try:
+            value = Parser._decode_value(value, VR=vr)
+        except:
+            print('Cannot decode value {0} for tag {1}'.format(value, tagname))
+            raise
         return value, tag, vr
 
     @staticmethod
@@ -202,7 +239,9 @@ class Parser():
 
     @staticmethod
     def _decode_value(dictvalue, VR = None):
-        if isinstance(dictvalue, str):
+        if dictvalue is None:
+            value = None
+        elif isinstance(dictvalue, str):
             value = json.loads(dictvalue)
         elif isinstance(dictvalue, (float, int)):
             value = dictvalue
@@ -211,8 +250,10 @@ class Parser():
         else:
             msg = 'Value should be str, int or float. Not {0}'
             raise TypeError(msg.format(str(type(dictvalue))))
-
-        if isinstance(value, list) and VR == 'SQ':
+        
+        if value is None:
+            pass
+        elif isinstance(value, list) and VR == 'SQ':
             return [Parser.decode(vi) for vi in value]
         elif VR == 'OB':
             # bytes are stored as hex string, this should retrun bytes
@@ -222,4 +263,43 @@ class Parser():
             value = pydicom.tag.Tag(value)
         elif VR == 'US or SS':
             value=str(value)
+        elif VR in ('DA', 'DT', 'TM'):
+            if isinstance(dictvalue, str):
+                dictvalue = json.loads(dictvalue)
+            if isinstance(dictvalue, list):
+                return [Parser._decode_value(vi, VR=VR) for vi in dictvalue]
+            elif VR == 'DA':
+                value = (datetime(1970,1,1) + timedelta(seconds=dictvalue)).strftime('%Y%m%d')
+            elif VR == 'DT':
+                value = (datetime(1970,1,1) + timedelta(seconds=dictvalue)).strftime('%Y%m%d %H%M%S.%f')
+            elif VR == 'TM':
+                if value == Parser.TM_NULL:
+                    value = ''
+                else:
+                    value = (datetime(1970,1,1) + timedelta(seconds=dictvalue/1000))
+                    value = value.strftime('%H%M%S.%f')
+            if value == Parser.DT_NULL:
+                value = ''
         return value
+    
+    
+    @staticmethod
+    def unix_time(dt):
+        if isinstance(dt, str):
+            if '.' in dt:
+                dt = dt.split('.')[0]
+            if dt == '':
+                dt = Parser.DT_NULL
+            else:
+                dt = dateutil.parser.parse(dt)
+        epoch = datetime.utcfromtimestamp(0)
+        delta = dt - epoch
+        return delta.total_seconds()
+    
+    @staticmethod
+    def unix_time_millis(dt):
+        ms = 0
+        if isinstance(dt, str) and '.' in dt:
+            ms = int(dt.split('.')[1])
+            dt = dt.split('.')[0]
+        return int(Parser.unix_time(dt) * 1000) + ms

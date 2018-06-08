@@ -82,10 +82,7 @@ class Database(DicomReadable, Logger):
             files = path
         elif os.path.isfile(path):
             files = [path]
-            
-        
-       
-        
+
         if scan:
             self._update_db(files=files, silent=silent)
     
@@ -314,7 +311,11 @@ class Database(DicomReadable, Logger):
 
 
         # convert header to dictionary
-        hdict = self._encode(header)
+        try:
+            hdict = self._encode(header)
+        except:
+            print('Cannot parse header of file {0}'.format(file))
+            raise
         hdict[self._TAGNAMES_COL] = json.dumps(list(hdict.keys())) # store tag names
         hdict[self._FILENAME_COL] = file # add filenmae to dictionary
 
@@ -385,7 +386,7 @@ class Database(DicomReadable, Logger):
         return values
 
     def query(self, close=True, sort_by=None,
-              partial_match=False, sort_decimal=False, clean=True, **kwargs):
+              partial_match=False, sort_decimal=False, clean=False, **kwargs):
         """ Query the table """
         column_names = self.database.column_names(self._active_table)
         
@@ -397,7 +398,8 @@ class Database(DicomReadable, Logger):
             if not partial_match:
                 # exact values are json dumps, inexact values
                 # work on json strings.
-                kwargs[tag] = json.dumps(value)
+                _, VR = Parser._decode_tagname(tag)
+                kwargs[tag] = Parser._convert_value(value, VR=VR)
 
         self.database.query(self._active_table, column_names=column_names,
                                 close=close, sort_by=sort_by, 
@@ -474,10 +476,19 @@ class Database(DicomReadable, Logger):
             existing_columns = []
 
         for tag_name in tag_names:
+            var_type = self._var_type_for_tag(tag_name)
+            
             if tag_name not in existing_columns:
                 self.database.add_column(self._MAIN_TABLE, tag_name, 
-                                close=False, var_type=self.database.TEXT)
+                                close=False, var_type=var_type)
     
+    def _var_type_for_tag(self, tagname):
+        _, VR = Parser._decode_tagname(tagname)
+        if VR in ('DA', 'DT', 'TM'):
+            var_type = SQLiteWrapper.INTEGER
+        else:
+            var_type = SQLiteWrapper.TEXT
+        return var_type
     def _count_tag(self, tagname):
         try:
             values = getattr(self, tagname)

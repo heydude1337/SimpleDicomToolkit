@@ -1,0 +1,87 @@
+# TAG: [copy_from_template, default value]
+AccessionNumber: [Yes, '0']
+AcquisitionDate: [Yes, '<Today Date>']
+AcquisitionTerminationCondition: [Yes, 'TIME']
+AcquisitionTime: [Yes, '<Today Time>']
+AngularViewVector: [No, [1]]
+Columns: [No, 1]
+ContentDate: [No, '<Today Date>']
+ContentTime: [No, '<Today Time>']
+CorrectedImage: [Yes, '<None>']
+CountsAccumulated: [Yes, '<None>']
+DateOfLastCalibration: [Yes, '<None>']
+DetectorInformationSequence: [Yes, '<Generate Sequence>'] # Must be There
+DetectorVector: [No, [1]]
+EnergyWindowInformationSequence: [No, '<None>'] # May Be Ommitted
+EnergyWindowVector: [No, 1]
+FrameIncrementPointer: [Yes, '<None>']
+FrameOfReferenceUID: [Yes, '<New UID>']
+HighBit: [Yes, 15]
+ImageType: [Yes, ['ORIGINAL', 'PRIMARY', 'RECON TOMO', 'EMISSION']]
+InterventionDrugInformationSequence: [Yes, '<None>']
+InstanceNumber: [No , 1]
+InstitutionName: [Yes, '<None>']
+IssuerOfPatientID: [Yes, '<None>']
+LargestImagePixelValue: [Yes, '<None>']
+Manufacturer: [Yes, '<None>']
+ManufacturerModelName: [Yes, '<None>']
+Modality: [No, 'NM']
+NumberOfDetectors: [Yes, 2]
+NumberOfEnergyWindows: [Yes, '<None>']
+NumberOfFrames: [Yes, 1]
+NumberOfRotations: [Yes, 1]
+OperatorsName: [No, '<None>']
+PatientAge: [Yes, '<None>']
+PatientBirthDate: [Yes, '<Today Date>']
+PatientGantryRelationshipCodeSequence: [No, '<None>'] # May Be Ommitted
+PatientID: [Yes, '1']
+PatientName: [Yes, 'Unnamed']
+PatientOrientationCodeSequence: [No, '<None>'] # May Be Ommitted
+PatientPosition: [Yes, 'FFS']
+PatientSex: [Yes, 'O']
+PatientWeight: [Yes, 1]
+PerformedProcedureStepDescription: [Yes, '']
+PerformedProcedureStepID: [Yes, '1']
+PerformedProcedureStepStartDate: [Yes, '<None>']
+PerformedProcedureStepStartTime: [Yes, '<None>']
+PhotometricInterpretation: [No, 'MONOCHROME2']
+
+PixelRepresentation: [No , 0]
+PositionReferenceIndicator: [Yes, '']
+ProcedureCodeSequence: [Yes, '<None>']
+ProtocolName: [Yes, '<None>']
+RadiopharmaceuticalInformationSequence: [Yes, '<Generate Sequence>'] # Must be There
+ReferringPhysicianName: [Yes, '<None>']
+RequestedProcedureDescription: [Yes, '<None>']
+
+RotationInformationSequence: [No, '<None>'] # May Be Ommitted
+RotationVector: [Yes, [1]]
+Rows: [Yes, 1]
+SamplesPerPixel: [No, 1]
+SeriesDate: [Yes, '<Today Date>']
+SeriesDescription: [No, 'Python Generated']
+SeriesInstanceUID: [No, '<New UID>']
+SeriesNumber: [No, 101]
+SeriesTime: [Yes, '<Today Time>']
+SoftwareVersions: [Yes, '<None>']
+SOPClassUID: [No, '1.2.840.10008.5.1.4.1.1.20']
+SOPInstanceUID: [No, '<New UID>']
+StationName: [Yes, '<None>']
+StudyDate: [Yes, '<Today Date>']
+StudyID: [Yes, '1']
+StudyInstanceUID: [Yes, '<New UID>']
+StudyTime: [Yes, '<Today Time>']
+TimeOfLastCalibration: [Yes, '<None>']
+TypeOfDetectorMotion: [Yes, '<None>']
+WindowCenter: [Yes, 32768]
+WindowWidth: [Yes, 65536]
+
+
+
+
+
+
+
+
+
+
