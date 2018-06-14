@@ -299,7 +299,7 @@ class Database(sdtk.Logger, HeadersForDatabase):
         return self
     
     def query(self, *args, **kwargs):
-        warnings.warn('Use select instead of query', DeprecationWarning)
+        warnings.warn('\nUse select instead of query\n', DeprecationWarning)
         return self.select(*args, **kwargs)
     
     @staticmethod
@@ -349,7 +349,7 @@ class Database(sdtk.Logger, HeadersForDatabase):
             sort_by = 'InstanceNumber'
         else:
             if self.instance_count > 1:
-                warnings.warn('Slice Sorting Failed Before Reading!', 
+                warnings.warn('\nSlice Sorting Failed Before Reading!\n', 
                               RuntimeWarning)
             sort_by = None
             
@@ -375,7 +375,8 @@ class Database(sdtk.Logger, HeadersForDatabase):
             bqml_to_suv = sdtk.dicom_reader.suv_scale_factor(header)
         except:
             if self.SUV:
-                warnings.warn('No SUV information found, disabling SUV', RuntimeWarning)
+                warnings.warn('\nNo SUV information found, disabling SUV\n', 
+                              RuntimeWarning)
                 self.SUV = False                
             pass
             
@@ -592,7 +593,7 @@ class DatabaseBuilder(sdtk.Logger):
         try:
             hdict = HeadersForDatabase._encode(header)
         except Exception as e:
-           raise
+           raise RuntimeError('Cannot add: {file}'.format(file=file))
             
         
         # store tag names        
@@ -653,21 +654,21 @@ class DatabaseBuilder(sdtk.Logger):
         else:
             existing_columns = []
 
-        for tag_name in tag_names:
-            var_type = self._var_type_for_tag(tag_name)
-            
+        var_type = sdtk.SQLiteWrapper.TEXT # everything is stored as text
+        
+        for tag_name in tag_names:    
             if tag_name not in existing_columns:
                 self.database.add_column(self._MAIN_TABLE, tag_name, 
                                 close=False, var_type=var_type)
                 
-    @staticmethod
-    def _var_type_for_tag(tagname):
-        _, VR, _ = sdtk.Decoder._decode_tagname(tagname)
-        if VR in ('DA', 'DT', 'TM'):
-            var_type = sdtk.SQLiteWrapper.INTEGER
-        else:
-            var_type = sdtk.SQLiteWrapper.TEXT
-        return var_type
+#    @staticmethod
+#    def _var_type_for_tag(tagname):
+#        _, VR, _ = sdtk.Decoder._decode_tagname(tagname)
+#        if VR in ('DA', 'DT', 'TM'):
+#            var_type = sdtk.SQLiteWrapper.REAL
+#        else:
+#            var_type = sdtk.SQLiteWrapper.TEXT
+#        return var_type
     
     @staticmethod
     def _chunks(iterable, chunksize):
@@ -680,7 +681,7 @@ class DatabaseBuilder(sdtk.Logger):
 if __name__ == "__main__":
     folder = 'C:/Users/757021/Data/Orthanc'
     folder = 'C:/Users/757021/Data/Y90'
-    database = Database(path = folder, rebuild=False, scan=False)
+    database = Database(path = folder, rebuild=False, scan=True)
     database.select(SeriesDescription='WB')
     self = database
     self.image

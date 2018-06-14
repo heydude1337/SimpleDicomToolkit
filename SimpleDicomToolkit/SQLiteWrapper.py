@@ -247,11 +247,8 @@ class SQLiteWrapper(Logger):
         if sort_by is None:
             order_q = ''
         else: 
-            if sort_decimal is True:
-                order_q = ' ORDER BY CAST({0} AS DECIMAL)'
-            else:
-                order_q = ' ORDER BY {0}'
-            order_q = order_q.format(sort_by)
+            order_q = self._order_clause(sort_by=sort_by, 
+                                         sort_decimal=sort_decimal)
 
         values = list(kwargs.values())
 

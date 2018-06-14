@@ -11,32 +11,6 @@ import dateutil
 import pydicom
 import warnings
 
-#class DicomReadable():
-#    """ Superclass for DicomFiles and DicomDatabaseSQL """
-#    _images = None
-#    _image = None
-#    _headers = None
-#    MAX_FILES = 5000 # max number of files to be read at by property images
-#    SUV = True # convert PET images to SUV
-#
-#    @property
-#    def headers(self):
-#        raise NotImplementedError
-#    
-#    def get_header_for_uid(self):
-#        raise NotImplementedError
-#            
-#    @property
-#    def files(self):
-#        """ List of dicom files that will be read to an image or images. """
-#        # must be implemented by subclass
-#        raise NotImplementedError
-#        
-#    def reset(self):
-#        self._image = None
-#        self._images = None
-    
-    
 def sitk_image(path):
     """ Get SITK image from dicom file(s) containing a single dicom series. 
     Path may be a folder, file or list of files """
@@ -158,7 +132,8 @@ def rescale_values(header=None):
     elif hasattr(header, SimpleDicomToolkit.RESCALESLOPE):
         slope = 1# sitk does rescaling header.RescaleSlope
     else:
-        warnings.warn('No rescale slope found in dicom header', RuntimeWarning)
+        warnings.warn('\nNo rescale slope found in dicom header\n', 
+                      RuntimeWarning)
         slope = 1
 
     if hasattr(header, SimpleDicomToolkit.REALWORLDVALUEMAPPINGSEQUENCE):
@@ -166,7 +141,8 @@ def rescale_values(header=None):
     elif hasattr(header, SimpleDicomToolkit.RESCALEINTERCEPT):
         intercept = 0 # sitk does rescaling header.RescaleIntercept
     else:
-        warnings.warn('No rescale slope found in dicom header', RuntimeWarning)
+        warnings.warn('\nNo rescale slope found in dicom header\n', 
+                      RuntimeWarning)
         intercept = 0
 
     return slope, intercept

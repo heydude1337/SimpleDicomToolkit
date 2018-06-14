@@ -11,9 +11,14 @@ import warnings
 from SimpleDicomToolkit.logger import Logger
 import logging
 import dateutil
-from datetime import datetime, timedelta
+from datetime import datetime
 
-
+ISO_DATE = '%Y-%m-%d'
+ISO_TIME = "%H:%M:%S.%f"
+ISO_DATETIME = "%Y-%m-%d %H:%M:%S.%f"
+DICOM_DATE = '%Y%m%d'
+DICOM_DATETIME = '%Y%m%d %H%M%S.%f'
+DICOM_TIME = '%H%M%S.%f'
 logger = Logger(app_name = 'dicom_parser', log_level = logging.ERROR).logger
 
 class Header(dict):
@@ -62,8 +67,9 @@ class Encoder():
     _PRIVATE_TAG_PREFIX = 'private_tag_'
     _PRIVATE_TAG_NAME = _PRIVATE_TAG_PREFIX + '{group}_{element}_{VR}_{VM}'
 
-    DT_NULL = datetime(1800,1,1)
-    TM_NULL = -1
+    DT_NULL = datetime(1800,1,1).strftime(ISO_DATETIME)
+    DA_NULL = datetime(1800,1,1).strftime(ISO_DATE)
+    TM_NULL = '-1'
     
     @staticmethod
     def encode(dicom_header, skip_private_tags=False):
@@ -109,11 +115,12 @@ class Encoder():
         if isinstance(element.value, pydicom.sequence.Sequence):
             value = Encoder._encode_sequence(element, skip_private_tags)
         else:
-            try:
+            try:                
                 value = Encoder._encode_value(element, skip_private_tags)
             except ValueError:
-                warnings.warn('Cannot encode {0}, ommitting tag'.format(element),
-                              RuntimeWarning)
+                msg = '\nCannot encode {0}, ommitting tag\n'
+                warnings.warn(msg.format(element), RuntimeWarning)
+
                 return None
         return name, value
 
@@ -170,20 +177,29 @@ class Encoder():
         if isinstance(value, pydicom.valuerep.PersonName3):
             # special treatment of person names
             value = json.dumps(value.original_string)
-        elif VR == 'DA':
-                value = Encoder.unix_time(value)
-        elif VR == 'DT':
-            value = Encoder.unix_time(value)
-        elif VR == 'TM':
+        elif VR == 'DA': # DATE
+            if value == '':
+                value = Encoder.DA_NULL
+            else:
+                value = dateutil.parser.parse(value).strftime(ISO_DATE)            
+        elif VR == 'DT': # DATE AND TIME
+             if value == '' :
+                 value = Encoder.DT_NULL
+             else:
+                try:
+                    value = dateutil.parser.parse(value).strftime(ISO_DATETIME)
+                except:
+                    pass # store original string, dicom dt fields are messy
+        elif VR == 'TM': # TIME
             if value == '':
                 return Encoder.TM_NULL
             elif '.' in value:
                 value = datetime.strptime(value, '%H%M%S.%f')
             else:
                 value = datetime.strptime(value, '%H%M%S')
-            epoch = datetime.utcfromtimestamp(0)
-            value = datetime.combine(epoch.date(), value.time())
-            value = Encoder.unix_time_millis(value)
+            if value != Encoder.TM_NULL:
+                value = value.strftime(ISO_TIME)
+                                
         elif VR == 'AT':
             # dicom tag reference
             value = json.dumps(value.real)
@@ -252,8 +268,8 @@ class Decoder():
         for tagname, repval in header_dict.items():
             try:
                 value, tag, vr, vm = Decoder.decode_entry(tagname, repval)
-            except:
-                raise ValueError('Cannot decode tag: {0}'.format(tagname))
+            except:                
+                raise ValueError('Cannot decode tag: {0} with value {1}'.format(tagname, repval))
             try:               
                 ds.add_new(tag, vr, value)
             except:
@@ -302,18 +318,10 @@ class Decoder():
         return tag, vr, vm
 
     @staticmethod
-    def _decode_value(dictvalue, VR = None, VM='1'):
-        if dictvalue is None:
-            value = None
-        elif isinstance(dictvalue, str):
-            value = json.loads(dictvalue)
-        elif isinstance(dictvalue, (float, int)):
-            value = dictvalue
-        elif dictvalue is None:
-            value=dictvalue
-        else:
-            msg = 'Value should be str, int or float. Not {0}'
-            raise TypeError(msg.format(str(type(dictvalue))))
+    def _decode_value(value, VR = None, VM='1'):
+        if isinstance(value, str) and VR not in ('DA', 'DT', 'TM'):
+            value = json.loads(value)
+    
         
         if value is None:
             pass
@@ -327,23 +335,24 @@ class Decoder():
             value = pydicom.tag.Tag(value)
         elif VR == 'US or SS':
             value=str(value)
-        elif VR in ('DA', 'DT', 'TM'):
-            if isinstance(dictvalue, str):
-                dictvalue = json.loads(dictvalue)
-            if isinstance(dictvalue, list):
-                return [Decoder._decode_value(vi, VR=VR) for vi in dictvalue]
-            elif VR == 'DA':
-                value = (datetime(1970,1,1) + timedelta(seconds=dictvalue)).strftime('%Y%m%d')
-            elif VR == 'DT':
-                value = (datetime(1970,1,1) + timedelta(seconds=dictvalue)).strftime('%Y%m%d %H%M%S.%f')
-            elif VR == 'TM':
-                if value == Encoder.TM_NULL:
-                    value = ''
-                else:
-                    value = (datetime(1970,1,1) + timedelta(seconds=dictvalue/1000))
-                    value = value.strftime('%H%M%S.%f')
-            if value == Encoder.DT_NULL:
+        elif VR == 'DA':
+            if value == Encoder.DA_NULL:
                 value = ''
+            else:
+                value = dateutil.parser.parse(value).strftime(DICOM_DATE)
+        elif VR == 'DT':
+            if value == Encoder.DT_NULL:
+                value = '.'
+            else:
+                try:
+                    value = dateutil.parser.parse(value).strftime(DICOM_DATETIME)
+                except:
+                    pass # return original string, dicom DT fields are messy
+        elif VR == 'TM':
+            if value == Encoder.TM_NULL:
+                value = ''
+            else:
+                value = datetime.strptime(value, ISO_TIME).strftime(DICOM_TIME)
         return value
     
     @staticmethod
@@ -363,7 +372,8 @@ class Decoder():
             return False
 if __name__ == "__main__":
     file = 'C:\\Users\\757021\\Data\\Y90\\6772044\\WB\\1.3.12.2.1107.5.6.1.69069.30190118052910055366800000002'
-    file = 'C:\\Users\\757021\\Data\\DAQSPECT\\Rotterdam\\dcm153959899.0000.dcm'
+    file = 'C:/Users/757021/Data/Y90/Output/dicom_file_42.dcm'
+    #file = 'C:\\Users\\757021\\Data\\DAQSPECT\\Rotterdam\\dcm153959899.0000.dcm'
     header = pydicom.read_file(file)
     encoded = Encoder.encode(header)
     decoded = Decoder.decode(encoded)
