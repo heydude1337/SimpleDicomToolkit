@@ -24,6 +24,8 @@ class SQLiteWrapper(Logger):
 
     _LOG_LEVEL   = logging.ERROR
 
+    START = 'start'
+    END = 'end'
 
     def __init__(self, database_file=None):
         """ Connect to database and create tables
@@ -45,16 +47,8 @@ class SQLiteWrapper(Logger):
         self._row_factory = None
 
         self.close()
-    @property
-    def row_factory(self):
-        return self._row_factory
+        
     
-    @row_factory.setter
-    def row_factory(self, factory):
-        self._row_factory = factory
-        if self.connected:
-            self.connection.row_factory = self._row_factory
-            self.cursor = self.connecion.cursor()
         
     def execute(self, sql_query, values=None, close=True, fetch_all=False, debug=False):
         """ Execute a sql query, database connection is opened when not
@@ -166,7 +160,12 @@ class SQLiteWrapper(Logger):
 
         if close:
             self.close()
-
+            
+    def delete_all_tables(self):
+        for table in self.table_names:
+            self.delete_table(table)
+        self.close()
+        
     def delete_table(self,  table_name, close=False):
         """ Delete table """
         if table_name not in self.table_names:
@@ -188,18 +187,6 @@ class SQLiteWrapper(Logger):
                    close=True, sort_by=None, distinct=True, **kwargs):
         """ Return column values from table """
 
-
-#            
-#        if distinct:
-#            distinct = 'DISTINCT'
-#        else:
-#            distinct = ''
-#
-#        cmd = 'SELECT {distinct} {column} FROM {table}'
-#        if sort:
-#            cmd += ' ORDER BY {column}'
-#        cmd = cmd.format(column=column_name, table=table_name, distinct=distinct)
-#        result = self.execute(cmd, close=close, fetch_all=True)
         result = self.query(table_name, column_names=[column_name],
                             sort_by=sort_by, distinct=distinct, close=close,
                             **kwargs)
@@ -208,8 +195,8 @@ class SQLiteWrapper(Logger):
         return result
 
     def query(self, source_table, destination_table = None, column_names=None,
-               close=True, sort_by=None, partial_match=False, distinct = False,
-               row_factory = None, print_query=False, sort_decimal=False,
+               close=True, sort_by=None, distinct = False,
+               row_factory = None, sort_decimal=False,
                **kwargs):
         """ Perform a query on a table. E.g.:
             database.query(city = 'Rotterdam',
@@ -221,6 +208,7 @@ class SQLiteWrapper(Logger):
         TEMP_TABLE = 'temp_query_table'
         query = ('{create_table} SELECT {distinct} {columns} FROM {source_table} '
                 '{where_clause} {order_q}')
+        
         if distinct:
             distinct = 'DISTINCT'
         else:
@@ -239,21 +227,16 @@ class SQLiteWrapper(Logger):
         else:
             columns = SQLiteWrapper.list_to_string(column_names)
         
-        operator = 'LIKE' if partial_match else '='
+    
         
-        where_clause = self._where_clause(operator=operator, **kwargs)
+        where_clause, values = SQLiteWrapper._where_clause(**kwargs)
         
                 
         if sort_by is None:
             order_q = ''
         else: 
-            order_q = self._order_clause(sort_by=sort_by, 
+            order_q = SQLiteWrapper._order_clause(sort_by=sort_by, 
                                          sort_decimal=sort_decimal)
-
-        values = list(kwargs.values())
-
-        if partial_match:
-            values = ['%{}%'.format(value) for value in values]
 
         if row_factory is not None:
             self.row_factory = row_factory
@@ -262,9 +245,7 @@ class SQLiteWrapper(Logger):
                     source_table=source_table, where_clause=where_clause,
                     order_q=order_q, distinct=distinct)    
         
-        if print_query:
-            print(query)
-            
+
         result = self.execute(query, values=values, fetch_all=True, 
                               close=close)
         
@@ -285,10 +266,10 @@ class SQLiteWrapper(Logger):
         cmd = 'INSERT INTO {table_name}({column_names}) VALUES'
 
 
-#        if column_names is None:
-#            column_names = self.column_names(table_name)
-#        if len(column_names) > 1 and len(values) != len(column_names):
-#            raise IndexError('Number of values must match number of columns!')
+        if column_names is None:
+            column_names = self.column_names(table_name)
+        if len(column_names) > 1 and len(values) != len(column_names):
+            raise IndexError('Number of values must match number of columns!')
         if not isinstance(values, (list, tuple)):
             values = [values]
         if not isinstance(column_names, (list, tuple)):
@@ -386,56 +367,21 @@ class SQLiteWrapper(Logger):
                 self.cursor = None
                 self.connected = False
                 
-    @staticmethod
-    def _order_clause(sort_by='MyColumn', sort_decimal = False):
-        if sort_decimal is True:
-            clause = ' ORDER BY CAST({0} AS DECIMAL) '
-        else:
-            clause = ' ORDER BY {0} '
-        
-        clause = clause.format(sort_by)
-        return clause   
-    
-    @staticmethod
-    def _where_clause(operator = '=', **kwargs):
-        if len(kwargs) == 0:
-            where_clause = ''
-        else:
-            where_clause = 'WHERE '
-            # append multiple conditions
-            for col_name, value in kwargs.items():
-                if operator == '=' and isinstance(value, (list, tuple)):
-                    operator = 'IN'
-                    place_holder = SQLiteWrapper.binding_str(len(value))
-                else:
-                    place_holder = '?'
-                clause = '{col_name} {operator} {place_holder} AND '
-                where_clause += clause.format(col_name=col_name,
-                                              operator=operator,
-                                              place_holder=place_holder) 
-                
-            where_clause = where_clause[:-4]  # remove last AND from string
-           
-
-        return where_clause
-    
-    
-    def set_column_where(self, table, column, value, partial_match=False, **kwargs):
+    def set_column_where(self, table, column, value, **kwargs):
         cmd = "UPDATE {table} SET {column} = ? {where_clause}"
     
-        where_clause = self._where_clause(**kwargs)
+        where_clause, values = self._where_clause(**kwargs)
         
         cmd = cmd.format(table=table, column=column, where_clause=where_clause)
                               
-        values = self.chain_values([value] + list(kwargs.values()))
+        values = [value] + values
         
         self.execute(cmd, values=values)
         
     def get_column_where(self, table, column, sort_by=None, sort_decimal=False,
-                         partial_match=False, **kwargs):
+                         **kwargs):
         
-        result = self.query(table, column_names=[column], sort_by=sort_by,
-                            partial_match=partial_match, 
+        result = self.query(table, column_names=[column], sort_by=sort_by,                         
                             sort_decimal=sort_decimal, **kwargs)
         return [res[0] for res in result]
     
@@ -454,7 +400,18 @@ class SQLiteWrapper(Logger):
         column_names = [pi[1] for pi in pragma]
         self.close(close)
         return column_names
-
+    
+    @property
+    def row_factory(self):
+        return self._row_factory
+    
+    @row_factory.setter
+    def row_factory(self, factory):
+        self._row_factory = factory
+        if self.connected:
+            self.connection.row_factory = self._row_factory
+            self.cursor = self.connecion.cursor()
+            
     @property
     def table_names(self):
         cmd = "SELECT name FROM sqlite_master WHERE type='table';"
@@ -483,6 +440,7 @@ class SQLiteWrapper(Logger):
             else:
                 chain += [v]
         return chain
+    
     @staticmethod
     def binding_str(number):
         """ Convert list of numbers to a SQL required format in str """
@@ -493,3 +451,62 @@ class SQLiteWrapper(Logger):
         binding_str += ')'
         return binding_str
 
+    @staticmethod
+    def is_between_dict(value):
+        if isinstance(value, dict) and len(value) == 2:
+            if SQLiteWrapper.END in value.keys():
+                if SQLiteWrapper.START in value.keys():
+                    return True
+        else:
+            return False
+        
+    @staticmethod
+    def _order_clause(sort_by='MyColumn', sort_decimal = False):
+        if sort_decimal is True:
+            clause = ' ORDER BY CAST({0} AS DECIMAL) '
+        else:
+            clause = ' ORDER BY {0} '
+        
+        clause = clause.format(sort_by)
+        return clause   
+    
+
+    @staticmethod
+    def _where_clause(**kwargs):
+        if len(kwargs) == 0:
+            return '', []
+        
+        def between(value):
+            start, end = (value[SQLiteWrapper.START], value[SQLiteWrapper.END])
+            if start > end:
+                msg = 'Start lies beyond end in selection'
+                raise ValueError(msg)
+            expr = ' BETWEEN ? AND ?'
+            value = [start, end]
+            return expr, value
+            
+        def single_clause(column, value):
+            if isinstance(value, (list, tuple)):
+                expr = column + ' IN '+ SQLiteWrapper.binding_str(len(value))
+            if SQLiteWrapper.is_between_dict(value):
+                expr, value = between(value)
+                expr = column + expr
+            else:
+                expr = column + ' = ?'
+                value = [value]
+            return expr, value
+        
+       
+        where_clause = 'WHERE '
+        # append multiple conditions
+        values = []
+        for col_name, value in kwargs.items():
+            expr, value = single_clause(col_name, value)
+            where_clause += expr
+            where_clause += ' AND'
+            values += value
+            
+        where_clause = where_clause[:-4]  # remove last AND from string
+           
+
+        return where_clause, values
