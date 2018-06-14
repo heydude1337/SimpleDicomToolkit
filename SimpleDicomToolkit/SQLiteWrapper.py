@@ -185,28 +185,30 @@ class SQLiteWrapper(Logger):
 
 
     def get_column(self, table_name, column_name, 
-                   close=True, sort=False, distinct=True):
+                   close=True, sort_by=None, distinct=True, **kwargs):
         """ Return column values from table """
 
-        if distinct:
-            distinct = 'DISTINCT'
-        else:
-            distinct = ''
 
-        cmd = 'SELECT {distinct} {column} FROM {table}'
-        if sort:
-            cmd += ' ORDER BY {column}'
-        cmd = cmd.format(column=column_name, table=table_name, distinct=distinct)
-        result = self.execute(cmd, close=close, fetch_all=True)
-
+#            
+#        if distinct:
+#            distinct = 'DISTINCT'
+#        else:
+#            distinct = ''
+#
+#        cmd = 'SELECT {distinct} {column} FROM {table}'
+#        if sort:
+#            cmd += ' ORDER BY {column}'
+#        cmd = cmd.format(column=column_name, table=table_name, distinct=distinct)
+#        result = self.execute(cmd, close=close, fetch_all=True)
+        result = self.query(table_name, column_names=[column_name],
+                            sort_by=sort_by, distinct=distinct, close=close,
+                            **kwargs)
         result = [res[0] for res in result]
 
-        if close:
-            self.close()
         return result
 
     def query(self, source_table, destination_table = None, column_names=None,
-               close=True, sort_by=None, partial_match=False, 
+               close=True, sort_by=None, partial_match=False, distinct = False,
                row_factory = None, print_query=False, sort_decimal=False,
                **kwargs):
         """ Perform a query on a table. E.g.:
@@ -217,9 +219,13 @@ class SQLiteWrapper(Logger):
             columns specifies which columns will be returned.
         """
         TEMP_TABLE = 'temp_query_table'
-        query = ('{create_table} SELECT {columns} FROM {source_table} '
+        query = ('{create_table} SELECT {distinct} {columns} FROM {source_table} '
                 '{where_clause} {order_q}')
-        
+        if distinct:
+            distinct = 'DISTINCT'
+        else:
+            distinct = ''
+            
         if destination_table is None:
             create_table = ''
         else:
@@ -232,21 +238,11 @@ class SQLiteWrapper(Logger):
             columns = '*'
         else:
             columns = SQLiteWrapper.list_to_string(column_names)
-
         
-        if len(kwargs) == 0:
-            where_clause = ''
-        else:
-            where_clause = 'WHERE '
-            # append multiple conditions
-            for col_name in kwargs.keys():
-                if not partial_match:
-                    clause = '{col_name}=? AND '
-                else:
-                    clause =  '{col_name} LIKE ? AND '
-                    
-                where_clause += clause.format(col_name=col_name) 
-            where_clause = where_clause[:-4]  # remove last AND from string
+        operator = 'LIKE' if partial_match else '='
+        
+        where_clause = self._where_clause(operator=operator, **kwargs)
+        
                 
         if sort_by is None:
             order_q = ''
@@ -267,7 +263,7 @@ class SQLiteWrapper(Logger):
             
         query = query.format(create_table=create_table, columns=columns,
                     source_table=source_table, where_clause=where_clause,
-                    order_q=order_q)    
+                    order_q=order_q, distinct=distinct)    
         
         if print_query:
             print(query)
@@ -392,8 +388,64 @@ class SQLiteWrapper(Logger):
                 self.connecion = None
                 self.cursor = None
                 self.connected = False
+                
+    @staticmethod
+    def _order_clause(sort_by='MyColumn', sort_decimal = False):
+        if sort_decimal is True:
+            clause = ' ORDER BY CAST({0} AS DECIMAL) '
+        else:
+            clause = ' ORDER BY {0} '
+        
+        clause = clause.format(sort_by)
+        return clause   
+    
+    @staticmethod
+    def _where_clause(operator = '=', **kwargs):
+        if len(kwargs) == 0:
+            where_clause = ''
+        else:
+            where_clause = 'WHERE '
+            # append multiple conditions
+            for col_name, value in kwargs.items():
+                if operator == '=' and isinstance(value, (list, tuple)):
+                    operator = 'IN'
+                    place_holder = SQLiteWrapper.binding_str(len(value))
+                else:
+                    place_holder = '?'
+                clause = '{col_name} {operator} {place_holder} AND '
+                where_clause += clause.format(col_name=col_name,
+                                              operator=operator,
+                                              place_holder=place_holder) 
+                
+            where_clause = where_clause[:-4]  # remove last AND from string
+           
 
-
+        return where_clause
+    
+    
+    def set_column_where(self, table, column, value, partial_match=False, **kwargs):
+        cmd = "UPDATE {table} SET {column} = ? {where_clause}"
+    
+        where_clause = self._where_clause(**kwargs)
+        
+        cmd = cmd.format(table=table, column=column, where_clause=where_clause)
+                              
+        values = self.chain_values([value] + list(kwargs.values()))
+        
+        self.execute(cmd, values=values)
+        
+    def get_column_where(self, table, column, sort_by=None, sort_decimal=False,
+                         partial_match=False, **kwargs):
+        
+        result = self.query(table, column_names=[column], sort_by=sort_by,
+                            partial_match=partial_match, 
+                            sort_decimal=sort_decimal, **kwargs)
+        return [res[0] for res in result]
+    
+    def set_column(self, table, column, value):
+        """ Set entire column to same value """
+        self.set_column_where(table, column, value)
+        
     def pragma(self, table_name, close=True):
         cmd = 'PRAGMA TABLE_INFO({table_name})'.format(table_name=table_name)
         result = self.execute(cmd, fetch_all=True)
@@ -425,7 +477,15 @@ class SQLiteWrapper(Logger):
         # remove trailing ,
         list_str = list_str[:-2]
         return list_str
-
+    @staticmethod
+    def chain_values(values):
+        chain = []
+        for v in values:
+            if isinstance(v, (list, tuple)):
+                chain += v
+            else:
+                chain += [v]
+        return chain
     @staticmethod
     def binding_str(number):
         """ Convert list of numbers to a SQL required format in str """

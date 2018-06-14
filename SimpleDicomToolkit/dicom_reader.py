@@ -9,111 +9,34 @@ import SimpleDicomToolkit
 import SimpleITK as sitk
 import dateutil
 import pydicom
+import warnings
 
-
-class DicomReadable():
-    """ Superclass for DicomFiles and DicomDatabaseSQL """
-    _images = None
-    _image = None
-    _headers = None
-    MAX_FILES = 5000 # max number of files to be read at by property images
-    SUV = True # convert PET images to SUV
-
-    @property
-    def headers(self):
-        raise NotImplementedError
+#class DicomReadable():
+#    """ Superclass for DicomFiles and DicomDatabaseSQL """
+#    _images = None
+#    _image = None
+#    _headers = None
+#    MAX_FILES = 5000 # max number of files to be read at by property images
+#    SUV = True # convert PET images to SUV
+#
+#    @property
+#    def headers(self):
+#        raise NotImplementedError
+#    
+#    def get_header_for_uid(self):
+#        raise NotImplementedError
+#            
+#    @property
+#    def files(self):
+#        """ List of dicom files that will be read to an image or images. """
+#        # must be implemented by subclass
+#        raise NotImplementedError
+#        
+#    def reset(self):
+#        self._image = None
+#        self._images = None
     
-    def get_header_for_uid(self):
-        raise NotImplementedError
-            
-    @property
-    def files(self):
-        """ List of dicom files that will be read to an image or images. """
-        # must be implemented by subclass
-        raise NotImplementedError
-    def reset(self):
-        self._image = None
-        self._images = None
     
-    @property
-    def image(self):
-        """ Returns an sitk image for the files in the files property.
-            All files must belong to the same dicom series
-            (same SeriesInstanceUID). """
-        
-        if self._image is not None:
-            return self._image
-        
-        assert self.series_count == 1
-        
-        series_uid = self.SeriesInstanceUID
-        
-        if hasattr(self, 'SliceLocation'):
-            sort_by = 'SliceLocation'
-        elif hasattr(self, 'InstanceNumber'):
-            sort_by = 'InstanceNumber'
-        else:
-            self.logger.error('Slice Sorting Failed Before Reading!')
-            sort_by = None
-            
-        to_read = self.query(SeriesInstanceUID=series_uid, sort_by=sort_by, 
-                             sort_decimal=True)
-        
-        image = _read_serie(to_read.files, SUV=False, folder=to_read.path)
- 
-        # get first uid from file
-        uid = self.SOPInstanceUID
-        if isinstance(uid, list):
-            uid = uid[0]
-        # generate header with SUV metadata
-        header = self.header_for_uid(uid)
-        
-        # calculate suv scale factor
-        try:
-            bqml_to_suv = _suv_scale_factor(header)
-        except:
-            if self.SUV:
-                raise
-            
-        if self.SUV:
-            image *= bqml_to_suv
-        
-            image.bqml_to_suv = bqml_to_suv
-        self._image = image
-        return self._image
-
-    @property
-    def images(self):
-        """ Returns a dictionary with keys the SeriesInstanceUID and
-            values the sitkimage belonging tot the set of files belonging to
-            the same dicom series (same SeriesInstanceUID). Number of files
-            in the files property cannot exceed the MAX_FILES property.
-            This prevents reading of too large data sets """
-
-        if len(self.files) > self.MAX_FILES:
-            print('Number of files exceeds MAX_FILES property')
-            raise IOError
-
-        if self._images is not None:
-            return self._images
-        
-        assert hasattr(self, SimpleDicomToolkit.SERIESINSTANCEUID)
-        
-        images = {}
-        
-        for uid in self.SeriesInstanceUID:
-            images[uid] = self.query(SeriesInstanceUID=uid).image
-        
-        self._images = images
-        return self._images
-    
-    def array(self):
-        return sitk.GetArrayFromImage(self.image)
-    
-    def arrays(self):
-        return dict([(key, sitk.GetArrayFromImage(image)) \
-                     for key, image in self.images.items()])
-
 def sitk_image(path):
     """ Get SITK image from dicom file(s) containing a single dicom series. 
     Path may be a folder, file or list of files """
@@ -137,7 +60,7 @@ def numpy_arrays(path):
     return SimpleDicomToolkit.Database(path, in_memory=True).arrays
 
 
-def _read_files(file_list):
+def read_files(file_list):
     """ Read a file or list of files using SimpleTIK. A file list will be
          read as an image series in SimpleITK. """
     if len(file_list) == 1:
@@ -153,13 +76,13 @@ def _read_files(file_list):
     try:
         image = file_reader.Execute()
     except:
-        print('cannot read file: {0}'.format(file_list))
-        raise IOError
+        IOError('cannot read file: {0}'.format(file_list))
+       
 
     return image
 
 
-def _read_serie(files, rescale=True, SUV=False, folder=None):
+def read_serie(files, rescale=True, SUV=False, folder=None):
     """ Read a single image serie from a dicom database to SimpleITK images.
 
         series_uid: Define the SeriesInstanceUID to be read from the database.
@@ -173,18 +96,25 @@ def _read_serie(files, rescale=True, SUV=False, folder=None):
     if folder is not None:
         files = [os.path.join(folder, file) for file in files]
 
-    image = _read_files(files)
-
+    image = read_files(files)
+    image = sitk.Cast(image, sitk.sitkFloat64)
+    slope, intercept = rescale_values(pydicom.read_file(files[0], 
+                                                    stop_before_pixels=True))
+    
+    image *= slope
+    image += intercept
+    
     # calculate and add a SUV scaling factor for PET.
     if SUV:
-        factor = _suv_scale_factor(pydicom.read_file(files[0], 
+        factor = suv_scale_factor(pydicom.read_file(files[0], 
                                                     stop_before_pixels=True))
         image *= factor
         image.BQML_TO_SUV = factor
         image.SUB_TO_BQML = 1/factor
+        
     return image
 
-def _suv_scale_factor(header):
+def suv_scale_factor(header):
     """ Calculate the SUV scaling factor (Bq/cc --> SUV) based on information
     in the header. Works on Siemens PET Dicom Headers. """
 
@@ -218,7 +148,7 @@ def _suv_scale_factor(header):
     return suv_scaling
 
 
-def _rescale_values(header=None):
+def rescale_values(header=None):
     """ Return rescale slope and intercept if they are in the dicom headers,
     otherwise 1 is returned for slope and 0 for intercept. """
     # apply rescale slope and intercept to the image
@@ -226,18 +156,18 @@ def _rescale_values(header=None):
     if hasattr(header, SimpleDicomToolkit.REALWORLDVALUEMAPPINGSEQUENCE):
         slope = header.RealWorldValueMappingSequence[0].RealWorldValueSlope
     elif hasattr(header, SimpleDicomToolkit.RESCALESLOPE):
-        slope = header.RescaleSlope
+        slope = 1# sitk does rescaling header.RescaleSlope
     else:
-        print('No rescale slope found in dicom header')
+        warnings.warn('No rescale slope found in dicom header', RuntimeWarning)
         slope = 1
 
     if hasattr(header, SimpleDicomToolkit.REALWORLDVALUEMAPPINGSEQUENCE):
         intercept = header.RealWorldValueMappingSequence[0].RealWorldValueIntercept
     elif hasattr(header, SimpleDicomToolkit.RESCALEINTERCEPT):
-        intercept = header.RescaleIntercept
+        intercept = 0 # sitk does rescaling header.RescaleIntercept
     else:
-        print('No rescale slope found in dicom header')
-        intercept = 1
+        warnings.warn('No rescale slope found in dicom header', RuntimeWarning)
+        intercept = 0
 
     return slope, intercept
 
