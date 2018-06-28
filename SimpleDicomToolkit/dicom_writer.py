@@ -10,7 +10,6 @@ import SimplePhantomToolkit as sptk
 import SimpleITK as sitk
 import numpy as np
 import datetime
-import time
 import yaml
 import os
 import pkg_resources
@@ -19,11 +18,11 @@ import pkg_resources
 resource_package = 'SimpleDicomToolkit'
 
 
-import pydicom 
+import pydicom
 from pydicom import uid as UID
 from pydicom.dataset import Dataset, FileDataset
 from pydicom.sequence import Sequence
-from pydicom.tag import Tag
+# from pydicom.tag import Tag
 
 
 
@@ -40,12 +39,11 @@ NM_SPECT_SOP_CLASS = '1.2.840.10008.5.1.4.1.1.20'
 
 def _clean_file_dataset(SOPClassUID = None):
     file_meta = Dataset()
-    file_meta.MediaStorageSOPClassUID = SOPClassUID # '1.2.840.10008.5.1.4.1.1.20'
+    file_meta.MediaStorageSOPClassUID = SOPClassUID
     file_meta.MediaStorageSOPInstanceUID = MEDIASTORAGESOPINSTANCEUID
-    file_meta.ImplementationClassUID = IMPLEMENTATIONCLASSUID #'1.2.752.37.5.4.15'
+    file_meta.ImplementationClassUID = IMPLEMENTATIONCLASSUID
     file_meta.ImplementationVersionName = 'Python Generated'
     file_meta.FileMetaInformationVersion = b'\x00\x01'
-    #file_meta.FileMetaInformationGroupLength = 172
     file_meta.TransferSyntaxUID = UID.ImplicitVRLittleEndian
     ds = FileDataset('dummy.dcm', {},
                      file_meta=file_meta, preamble=b"\0" * 128)
@@ -76,7 +74,7 @@ def sitk_to_nm_dicom(sitk_image=None, template=None):
     set_image_data(ds, sitk_image)
 
     # special attribute refers to other tag
-    setattr(ds,'FrameIncrementPointer', Tag(0x54, 0x80))
+    # setattr(ds,'FrameIncrementPointer', Tag(0x54, 0x80))
 
     return ds
 
@@ -119,7 +117,9 @@ def sitk_to_pet_dicom(sitk_image=None, template=None):
 
 def _create_pet_slice(slice_index, slice_location, slice_thickness, slice_image,
                       template=None, rescale_slope = 1, UIDS = {}):
+
     ATTRIBUTE_FILE = 'pet_sop_class.yml'
+
     ds = _clean_file_dataset(SOPClassUID = PET_SOP_CLASS)
 
     ds = set_default_attributes(ds, template=template, sop_file = ATTRIBUTE_FILE,
@@ -128,9 +128,9 @@ def _create_pet_slice(slice_index, slice_location, slice_thickness, slice_image,
     ds = set_image_attributes(ds, slice_image)
 
     setattr(ds, 'RescaleSlope', rescale_slope)
-
     setattr(ds, 'SliceLocation', slice_location)
     setattr(ds, 'SliceThickness', slice_thickness)
+
     for tag, value in UIDS.items():
         setattr(ds, tag, value)
 
@@ -189,7 +189,7 @@ def set_default_attributes(ds, template=None, sop_file = None, seq_fcns = {}):
     REMOVE = '<None>'
     NEW_SEQUENCE = '<Generate Sequence>'
 
-    TODAY_TIME = str(time.time())
+    TODAY_TIME = datetime.datetime.now().time().strftime('%H%M%S')
     TODAY_DATE = str(datetime.date.today()).replace('-','')
 
     sop_file_full = pkg_resources.resource_filename(resource_package, sop_file)
@@ -204,7 +204,10 @@ def set_default_attributes(ds, template=None, sop_file = None, seq_fcns = {}):
         if value == NEW_SEQUENCE:
             value = seq_fcns[attribute]()
         if copy and template:
-            setattr(ds, attribute, getattr(template, attribute))
+            if hasattr(template, attribute):
+                setattr(ds, attribute, getattr(template, attribute))
+            elif REMOVE != value:
+                setattr(ds, attribute, value)
         elif REMOVE != value:
             setattr(ds, attribute, value)
 
@@ -351,7 +354,7 @@ def write(dicom_data, export_folder = './output', file_name = 'dicom_file.dcm',
     for image_number, data_set in enumerate(dicom_data):
         if SeriesDescription:
             data_set.SeriesDescription = SeriesDescription
-        file_name_part, ext = os.path.splitext('dicom_file.dcm')
+        file_name_part, ext = os.path.splitext(file_name)
         file_name_part += '_{0}'.format(image_number)
         full_file_name = os.path.join(export_folder, file_name_part) + ext
         data_set.save_as(full_file_name)

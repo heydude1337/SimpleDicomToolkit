@@ -7,9 +7,9 @@ Created on Sun Nov 26 12:56:47 2017
 """
 
 from setuptools import setup
-
+from SimpleDicomToolkit.DicomDatabaseSQL import VERSION
 README = 'README.md'
-VERSION = 0.12
+
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
