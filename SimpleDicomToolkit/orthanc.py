@@ -36,7 +36,9 @@ For instance: %s 127.0.0.1 8042 .
 #"""
 
 class OrthancUploader():
-    def __init__(self, host = 'proliant', port = 8042, username = None, password = None):
+    def __init__(self, host = '127.0.0.1', port = 8042, username = None,
+                 password = None):
+
         self.url = 'http://' + host + ':' + str(port) + '/instances'
         if username is not None and password is not None:
             encoded = base64.b64encode(self.username + ':' + self.password)

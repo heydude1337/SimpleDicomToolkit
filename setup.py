@@ -7,13 +7,12 @@ Created on Sun Nov 26 12:56:47 2017
 """
 
 from setuptools import setup
-from SimpleDicomToolkit.DicomDatabaseSQL import VERSION
 README = 'README.md'
 
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
-
+VERSION = 0.931
 
 
 def readme():
@@ -40,7 +39,7 @@ setup(name=NAME,
       license='MIT',
       packages=['SimpleDicomToolkit'],
       install_requires=[
-          'SimpleITK', 'pydicom', 'httplib2'
+          'SimpleITK', 'pydicom', 'httplib2', 'pyyaml'
       ],
       include_package_data=True,
       zip_safe=False)

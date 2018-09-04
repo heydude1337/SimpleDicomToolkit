@@ -1,401 +1,597 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Wed Mar 21 11:26:30 2018
-
-@author: marcel
-"""
-
-import SimplePhantomToolkit as sptk
-import SimpleITK as sitk
-import numpy as np
-import datetime
-import yaml
-import os
-import pkg_resources
-
-
-resource_package = 'SimpleDicomToolkit'
-
-
 import pydicom
-from pydicom import uid as UID
-from pydicom.dataset import Dataset, FileDataset
-from pydicom.sequence import Sequence
-# from pydicom.tag import Tag
+import yaml
+import datetime
+import SimpleITK as sitk
+import collections
+import os
+from copy import copy
+from sitktools.tools import min, max
+import SimpleDicomToolkit as sdtk
+
+# list of all public dicom tags as keywords
+_dicom_dict = pydicom.datadict.DicomDictionary.values()
+DICOM_TAGS = [value[-1] for value in _dicom_dict if value[-1]]
+DICOM_TAGS += ['Isotope'] # hack to make radionuclide sequence working
+ALL = 'all'
+
+class Module(collections.MutableMapping):
+    """ Base class for dicom modules """
+    
+    # flag to determine if values can be copied from a template for this module
+    COPY = False 
+    
+    __empty_dataset = None
+    def __init__(self, image=None, **kwargs):
+        self.image = image
+        self.mapping = dict()
+        
+        for key, value in kwargs.items():
+            self[key] = value   
+            
+        for attr in dir(self):
+            if attr in DICOM_TAGS and (attr not in self.keys()):
+       
+                self[attr] = getattr(self, attr)
+    
+    @classmethod
+    def tags(cls):
+        """ Return the tags defined for this module """
+        tags = []
+        for attr in dir(cls):
+            if attr in DICOM_TAGS:
+                tags += [attr]
+        return tags
+    
+    @property
+    def _empty_dataset(self):
+        # Should return an 'empty' data set to which tags and values are added
+        # To write dicom files this should return a pydicom FileDataSet
+        if self.__empty_dataset is None:
+            return pydicom.Dataset()
+        else:
+            return copy(self.__empty_dataset)
+    
+    @_empty_dataset.setter
+    def _empty_dataset(self, dataset):
+        self.__empty_dataset = dataset
+        
+        
+    def __getitem__(self, key):
+        # Some values, like UIDS, need to be generated. Mapping may contain
+        # functions that return a value when called. 
+        value = self.mapping[key]
+        if callable(value):
+            value = value()
+        return value
+
+    def __setitem__(self, key, value):
+        if key not in DICOM_TAGS:
+            raise KeyError('Key must be a dicom tag name!')
+        self.mapping[key] = value
+           
+    def __delitem__(self, key):
+        del self.mapping[key]
+    
+    def __iter__(self):
+        return iter(self.mapping)
+    
+    def __len__(self):
+        return len(self.mapping)
+    
+    def keys(self):
+        return self.mapping.keys()
+    
+    def _get_dataset(self):
+        # Create a pydicom dataset for this module.
+        dataset = self._empty_dataset
+        for attr, value in self.items():
+            try:
+                setattr(dataset, attr, value)
+            except:
+                msg = 'Cannot set {1} on object {0} with value {2}'
+                raise RuntimeError(msg.format(self.__class__.__name__, 
+                                              attr, str(value)))
+        return dataset
+
+    @property
+    def dataset(self):
+        """ Returns a pydicom dataset for this module """
+        return self._get_dataset()
+    
+    def copy_from_dataset(self, dataset):
+        for tagname in self.keys():
+            try:
+                value = getattr(dataset, tagname)
+            except AttributeError:
+                value = None
+            if value is not None:
+                self[tagname] = value
 
 
 
-NBITS = 16
-# reference to this script:
-MEDIASTORAGESOPINSTANCEUID = '1.2.752.37.3135516787.1.20180201.121933.1'
-
-# not sure about this field but this value works for PET and SPECT
-IMPLEMENTATIONCLASSUID = '1.2.752.37.5.4.15'
-
-PET_SOP_CLASS = '1.2.840.10008.5.1.4.1.1.20'
-NM_SPECT_SOP_CLASS = '1.2.840.10008.5.1.4.1.1.20'
-#NM_SPECT_ACQ_SOP_CLASS = '1.2.840.10008.5.1.4.1.1.20'
-
-def _clean_file_dataset(SOPClassUID = None):
-    file_meta = Dataset()
-    file_meta.MediaStorageSOPClassUID = SOPClassUID
-    file_meta.MediaStorageSOPInstanceUID = MEDIASTORAGESOPINSTANCEUID
-    file_meta.ImplementationClassUID = IMPLEMENTATIONCLASSUID
-    file_meta.ImplementationVersionName = 'Python Generated'
-    file_meta.FileMetaInformationVersion = b'\x00\x01'
-    file_meta.TransferSyntaxUID = UID.ImplicitVRLittleEndian
-    ds = FileDataset('dummy.dcm', {},
-                     file_meta=file_meta, preamble=b"\0" * 128)
-    return ds
-
-def sitk_to_nm_dicom(sitk_image=None, template=None):
-    # CONSTANTS
-    NBITS = 16
-    ATTRIBUTE_FILE = 'nm_sop_class.yml'
-
-    # scale image
-    rescale_slope, sitk_image = image_to_int(sitk_image)
-
-    #Empty DataSet
-    ds = _clean_file_dataset(SOPClassUID = NM_SPECT_SOP_CLASS)
-
-    #Set Default attributes
-    seq_fcns = mapping_sequence_functions()
-    ds = set_default_attributes(ds, template=template, sop_file=ATTRIBUTE_FILE,
-                    seq_fcns = seq_fcns[NM_SPECT_SOP_CLASS])
-
-    ds = set_image_attributes(ds, sitk_image)
-
-    ds.RealWorldValueMappingSequence[0].RealWorldValueSlope = rescale_slope
-
-    ds = set_bit_information(ds, nbits = NBITS)
-
-    set_image_data(ds, sitk_image)
-
-    # special attribute refers to other tag
-    # setattr(ds,'FrameIncrementPointer', Tag(0x54, 0x80))
-
-    return ds
-
-def sitk_to_pet_dicom(sitk_image=None, template=None):
-    rescale_slope, sitk_image = image_to_int(sitk_image)
-
-    # UID's to be used for all slices
-    UIDS = {}
-    UIDS['SeriesInstanceUID'] = UID.generate_uid()
-
-    if template:
-        UIDS['StudyInstanceUID'] = template.StudyInstanceUID
-        UIDS['FrameOfReferenceUID'] = template.FrameOfReferenceUID
-    else:
-        UIDS['StudyInstanceUID'] = UID.generate_uid()
-        UIDS['FrameOfReferenceUID'] = UID.generate_uid()
-
-    slice_data = get_slice_information(sitk_image)
-
-    dss = [] # gather all datasets for all slices
-    for index, location, thickness, image in slice_data:
-        ds = _create_pet_slice(index, location, thickness, image,
-                               rescale_slope = rescale_slope,
-                               UIDS = UIDS,
-                               template = template)
-        dss += [ds] # append data set
-
-    return dss
-
-#def sitk_to_nm_acq_dicom(sitk_image=None, template=None):
-#    NBITS = 16
-#    ATTRIBUTE_FILE = 'nm_spect_acq_sop_class.yml'
-#
-#    ds = _clean_file_dataset(SOPClassUID = NM_SPECT_ACQ_SOP_CLASS)
-#    ds = set_default_attributes(ds, template=template, sop_file=ATTRIBUTE_FILE,
-#                    seq_fcns = mapping_sequence_functions()[NM_SPECT_SOP_CLASS])
-#    if template is None:
-#        ds.DetectorInformationSequence = [_detector_information_sequence(),
-#                                          _detector_information_sequence()]
-
-def _create_pet_slice(slice_index, slice_location, slice_thickness, slice_image,
-                      template=None, rescale_slope = 1, UIDS = {}):
-
-    ATTRIBUTE_FILE = 'pet_sop_class.yml'
-
-    ds = _clean_file_dataset(SOPClassUID = PET_SOP_CLASS)
-
-    ds = set_default_attributes(ds, template=template, sop_file = ATTRIBUTE_FILE,
-                    seq_fcns = mapping_sequence_functions()[PET_SOP_CLASS])
-
-    ds = set_image_attributes(ds, slice_image)
-
-    setattr(ds, 'RescaleSlope', rescale_slope)
-    setattr(ds, 'SliceLocation', slice_location)
-    setattr(ds, 'SliceThickness', slice_thickness)
-
-    for tag, value in UIDS.items():
-        setattr(ds, tag, value)
-
-    x, y = slice_image.TransformIndexToPhysicalPoint((0,0))
-    setattr(ds, 'ImagePositionPatient', [x,y,slice_location])
-    setattr(ds, 'ImageIndex', slice_index)
-
-    ds = set_image_data(ds, slice_image)
-
-    ds = set_bit_information(ds, nbits = NBITS)
-
-    return ds
-
-def get_slice_information(sitk_image):
-
-    locations = []
-    for i in range(0, sitk_image.GetSize()[2]):
-        locations += [sitk_image.TransformIndexToPhysicalPoint((0,0, i))[2]]
-
-    sitk_slices = [sitk_image[:,:,i] for i in range(0, len(locations))]
-
-    slice_indices = list(range(0, len(sitk_slices)))
-
-    slice_thickness = [sitk_image.GetSpacing()[2]] * len(slice_indices)
-    return tuple(zip(slice_indices, locations, slice_thickness, sitk_slices))
+class InstanceModule(Module):
+    """ Module that contains values that are instance (slice) specific, 
+    such as ImagePositionPatient. The property index determines wich instance
+    (slice) values to return. """
+    def __init__(self, index=None, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+    
+    def _get_dataset(self, index=None):
+        if index is not None:
+            self.index=index
+        
+        dataset = super()._get_dataset()
+        
+        return dataset
 
 
-def image_to_int(sitk_image, nbits=16):
-    # force float first
-    sitk_image = sitk.Cast(sitk_image, sitk.sitkFloat64)
+class ImagePlaneModule(InstanceModule):
+    COPY = False
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+  
+    def PixelSpacing(self):
+        return list(self.image.GetSpacing()[0:2])
+    
+    def ImageOrientationPatient(self):
+         return list(self.image.GetDirection())
+    
+    def ImagePositionPatient(self):
+        pos = self.image.TransformIndexToPhysicalPoint((0, 0, self.index))
+        return list(pos)
+            
+class SingleSequenceModule(Module):
+    def _get_dataset(self):
+        dataset = super()._get_dataset()
+        return pydicom.Sequence([dataset])
+        
+class RadiopharmaceuticalInformationSequenceModule(SingleSequenceModule):
+    _code_table = None
+    Isotope = 'F-18'
+    RadiopharmaceuticalStartDateTime = ''
+    RadionuclideTotalDose = 0
+    
+    @property
+    def code_table(self):
+        if self._code_table is None:
+            data = yaml.load(open('radionuclides.yml', 'r'))
+            self._code_table = data['RadionuclideHalflifes']
+        return self._code_table
+    
+    @property
+    def RadionuclideHalfLife(self):
+        value = self.code_table[self.Isotope]
+        mult = {'s': 1, 'm': 60, 'h': 3600, 'd': 24*3600, 'y': 365*24*3600}
+        value = float(value[:-2]) * mult[value[-1]]
+        return value
+    
+    @property
+    def RadionuclideCodeSequence(self):
+        return RadionuclideCodeSequenceModule(Isotope=self.Isotope).dataset
+    
+class RadionuclideCodeSequenceModule(SingleSequenceModule):
+    _code_table = None
+    Isotope = 'F-18'
+    
+    @property
+    def code_table(self):
+        if self._code_table is None:
+            data = yaml.load(open('radionuclides.yml', 'r'))
+            self._code_table = data['RadionuclideCodeSequence']
+        return self._code_table
+    @property
+    def CodeValue(self):
+        return self.code_table[self.Isotope]['CodeValue']
+    @property
+    def CodingSchemeDesignator(self):
+        return self.code_table[self.Isotope]['CodingSchemeDesignator' ]
+    @property
+    def CodeMeaning(self):
+        return self.code_table[self.Isotope]['CodeMeaning']
+    
+    
+class PETIsotopeModule(Module):
+    COPY = True
+    Isotope = 'F-18'
+    RadiopharmaceuticalStartDateTime = ''
+    RadionuclideTotalDose = 0
+    _RadiopharmaceuticalInformationSequence=None
+    @property
+    def RadiopharmaceuticalInformationSequence(self):
+        # return a pydicom dataset with the nuclide information
+        if self._RadiopharmaceuticalInformationSequence:
+            return self.EmptyRadiopharmaceuticalInformationSequence()
+        else:
+            return self._RadiopharmaceuticalInformationSequence
+    
+    @RadiopharmaceuticalInformationSequence.setter
+    def RadiopharmaceuticalInformationSequence(self, value):
+        self._RadiopharmaceuticalInformationSequence = value
+        print(value)
+        
+    def EmptyRadiopharmaceuticalInformationSequence(self):
+        mod = RadiopharmaceuticalInformationSequenceModule
+        tagnames = PETIsotopeModule.tags()
+        tagnames.remove('RadiopharmaceuticalInformationSequence')
+        mapping = dict([(tag, getattr(self, tag)) for tag in tagnames])
+        module = mod(**mapping)
+        return module.dataset
+        
+class GeneralImageModule(InstanceModule):        
+    COPY = True
+    def InstanceNumber(self):
+        return self.index
+  
+class ImagePixelModule(InstanceModule):
+    COPY = False
+    SamplesPerPixel = 1
+    PhotometricInterpretation = 'MONOCHROME2'
+    PixelRepresentation = 0
+    BitsAllocated = 16
+    BitsStored = 16
+    HighBit = 16 - 1
+    
+    def Rows(self):
+        return self.image.GetSize()[0]  
+    
+    def Columns(self):
+        return self.image.GetSize()[1]    
+    
+    def PixelData(self):
+        pixel_array = sitk.GetArrayFromImage(self.image[:, :, self.index])
+        return pixel_array.tostring(order=None)
 
-    # obtain maximum voxel value
-    max_val = sptk.geometry.sitk_max(sitk_image)
+class ImageModule(Module):
+    COPY = True
+    RescaleSlope = 0
+    RescaleIntercept = 1
 
-    # scale image between 0 and 2^nbits -1
-    sitk_image = sitk_image / max_val * (2**nbits-1)
+class PETImageModule(ImageModule):
+    COPY = True
+    FrameReferenceTime = 0
+    AcquisitionDate = ''
+    AcquisitionTime = ''
+    ActualFrameDuration = 1000
+    DecayFactor = 1
+    ImageIndex = 0
+
+class CTImageModule(ImageModule):
+    COPY = True
+    ImageType = ['ORIGINAL', 'PRIMARY', 'AXIAL']
+    RescaleType = 'HU'
+    KVP = ''
+    AcquisitionNumber = 1
+    SeriesDate = lambda _: datetime.datetime.now().date().strftime('%Y%m%d')
+
+class GeneralEquipmentModule(Module):
+    COPY = True
+    Manufacturer = ''
+
+class FrameOfReferenceModule(Module):
+    COPY = False
+    FrameOfReferenceUID = lambda _: pydicom.uid.generate_uid()
+    PositionReferenceIndicator = ''
+
+class GeneralSeriesModule(Module):
+    COPY = False
+    Modality = '' 
+    SeriesInstanceUID = lambda _: pydicom.uid.generate_uid()
+    SeriesNumber = None
+    PatientPosition = 'HFS'
+    SeriesDescription = 'No Description'
+
+class SOPCommonModule(Module):
+    COPY = False
+    SOPCLassUID = None
+    SOPInstanceUID = lambda _: pydicom.uid.generate_uid()
+    
+class GeneralStudyModule(Module):
+    COPY = True
+    StudyInstanceUID = lambda _: pydicom.uid.generate_uid()
+    StudyDate = ''
+    StudyTime = ''
+    ReferringPhysicianName = ''
+    StudyID = ''
+    AccessionNumber = ''
+            
+class PatientModule(Module):
+    COPY = True
+    PatientName = 'Unknown Patient' 
+    PatientID = '123456'
+    PatientSex = 'O'
+
+class PETSeriesModule(Module):
+    COPY = True
+    SeriesDate = lambda _: datetime.datetime.now().date().strftime('%Y%m%d')
+    SeriesTime = lambda _: datetime.datetime.now().time().strftime('%H%M%S.%f')
+    Units = 'BQML'
+    CountsSource = 'Emmission'
+    SeriesType = ['WHOLE BODY', 'IMAGE']
+
+    CorrectedImage = ['NORM', 'DTIM', 'ATTN', 'SCAT', 'DECY', 'RAN']
+    DecayCorrection = 'START'
+    CollimatorType = 'NONE'
+    
+    def NumberOfSlice(self):
+        return self.image.GetSize()[2]
+
+class FileMetaDataModule(Module):
+    MediaStoragSOPClassUID = '1'    
+    MediaStorageSOPInstanceUID = '1.2.752.37.3135516787.1.20180201.121933.1'
+    ImplementationClassUID = '1.2.752.37.5.4.15'
+    ImplementationVersionName = 'Python Generated'
+    FileMetaInformationVersion = b'\x00\x01'
+    TransferSyntaxUID = pydicom.uid.ImplicitVRLittleEndian
+    
+    def __init__(self, *args, SOPClassUID=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if SOPClassUID:
+            self.MediaStorageSOPClassUID = SOPClassUID
+
+    def _get_dataset(self):
+        file_meta = super()._get_dataset()
+        ds = pydicom.FileDataset('dummy.dcm', {}, file_meta=file_meta,
+                                 preamble=b"\0" * 128)
+        return ds
+    
+def image_to_int(image, nbits=16, intercept=None, slope=None):
+    """ Calculate rescale slope and intercept and convert image to
+        integer with the specified amount of bits. """
+    if intercept and min(image-intercept) < 0:
+        msg = ('Image Values would be negative with intercept: {0}.'
+               'a new intercept will be calculated')
+        print(msg.format(intercept))
+        intercept=None
+    cast = {8: sitk.sitkUInt8,
+            16: sitk.sitkUInt16,
+            32: sitk.sitkUInt32,
+            64: sitk.sitkUInt64}
+
+    if nbits not in cast.keys():
+        raise ValueError('Invalid number of bits: {0}'.format(nbits))
+
+    image = sitk.Cast(image, sitk.sitkFloat64)
+
+    if not intercept:
+        intercept = min(image)
+
+    if min(image - intercept) < 0:
+#            logger.debug('Intercept: %s', intercept)
+        raise ValueError('Values must be > 0 after rescaling')
+
+    max_val = max(image - intercept)
+
+    if slope is None:
+        slope =  max_val / (2**(nbits)-1)
+
+    image = (image - intercept) / slope
+
+    # check values, use round to circumvent precision errors
+    if round(max(image)) > (2**nbits-1): 
+        raise OverflowError('Maximum image value exceeds bit size')
 
     # make integer
-    sitk_image = sitk.Cast(sitk_image, sitk.sitkUInt16)
+    image = sitk.Cast(image, cast[nbits])
 
-    # calculate rescale slope
-    rescale_slope = max_val / (2**nbits-1)
+    return slope, intercept, image
 
-    return rescale_slope, sitk_image
+class SOPStorageClass():
+    modules = () # Modules that are used to convert to dicom
+    DEFAULTBITS = 16 # Used when BitsAllocated is not present
+    
+    filename = 'dummy.dcm'
+    folder = './test'
+    
+    _module = None
+    _image = None
+    
+    def __init__(self, image, folder=None, filename=None, template=None, 
+                 **kwargs):
+        self.image = image
+        
+        if filename:
+            self.filename=filename
+            
+        if folder:
+            self.folder = folder
+        
+        if GeneralStudyModule in self.modules:
+            self.StudyInstanceUID = pydicom.uid.generate_uid()
+        
+        if GeneralSeriesModule in self.modules:
+            self.SeriesInstanceUID = pydicom.uid.generate_uid()
+            
+        if FrameOfReferenceModule in self.modules:
+            self.FrameOfReferenceUID = pydicom.uid.generate_uid()
+            
+        if template:
+            self.use_template(template)
+            
+        # overrides tags in the modules
+        for key, value in kwargs.items():
+            if key in DICOM_TAGS:
+                print(key, value)
+                setattr(self, key, value)
+            else:
+                raise KeyError
+        
+    def _tags_to_copy(self):
+         to_copy = []
+         for module in self.modules:
+            if module.COPY:
+                to_copy += module.tags()
+         return to_copy
+    
+    def use_template(self, template=None):
+        """ Copy values from template """
+        if isinstance(template, str):
+            template = pydicom.read_file(template)
+            
+        for tag in self._tags_to_copy():
+            if hasattr(template, tag):                
+                setattr(self, tag, getattr(template,tag))
+    @property
+    def image(self):
+        return self._image
+    
+    @property
+    def file_dataset(self):
+        return FileMetaDataModule(SOPClassUID = self.SOPClassUID).dataset
+    
+    @property
+    def module(self):
+        if self._module is None:
+            # generate a subclass from all selected modules
+            module_cls = type('ComposedModule', self.modules, {})
+            self._module = module_cls()
+            self._module.image = self.image
+            # datasets need to be derived from the pydicom FileDataSet
+            self._module._empty_dataset = self.file_dataset
 
+            for name in dir(self):
+                # copy tags to module (override module defaults!)
+                if name in DICOM_TAGS:
+                    self._module[name] = getattr(self, name)
+        return self._module
+                              
+    @image.setter
+    def image(self, image):
+        self._set_image(image)
+       
+    def write(self):
+        os.makedirs(self.folder, exist_ok=True)
+        pydicom.write_file(self.filename, self.dataset)
+        
+    def _set_image(self, image):
+        self._image = image
+        self._module = None
+        
+    def __setattr__(self, name, value):
+        if name in DICOM_TAGS:
+            # override default values in module
+            if name in self.module.keys():
+                self.module[name] = value
+        super(SOPStorageClass, self).__setattr__(name, value)
 
-def set_image_data(ds, sitk_image):
-    pixel_array = sitk.GetArrayFromImage(sitk_image)
-    setattr(ds, 'PixelData', pixel_array.tostring(order=None))
-    return ds
+    @property
+    def dataset(self):
+        return self._get_dataset()
+    
+    def _get_dataset(self):       
+        return self.module.dataset
+        
+class ImagePlaneSeriesStorage(SOPStorageClass):
+    """ Superclass for SOPs that implement the ImagePlaneModule """
+    DEFAULT_BITS = 16
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    
+    def _set_image(self, image, intercept=None):
+        nbits = getattr(self, 'BitsStored', self.DEFAULT_BITS)
+        
+        slope, intercept, image = image_to_int(image, nbits=nbits,
+                                               intercept=intercept)
+        self.RescaleSlope = slope
+        self.RescaleIntercept = intercept        
+        super()._set_image(image)
+    
+    def _tags_to_copy(self):
+        to_copy = super()._tags_to_copy()
+        
+        for x in ('RescaleIntercept', 'RescaleSlope'):
+            to_copy.remove(x)
+        
+        return to_copy
+    
+    def datasets(self, index=0):
+        dataset = self.module._get_dataset(index=index)
+        return dataset
+    
+    def write(self):
+        file, ext = os.path.splitext(self.filename)
+        folder = self.folder
+        os.makedirs(folder, exist_ok=True)
+        sdtk.progress_bar(0, self.image.GetSize()[2]-1, 'Writing ')
+        for i in range(self.image.GetSize()[2]):
+            sdtk.progress_bar(i, self.image.GetSize()[2]-1, 'Writing ')
+            fullfile = os.path.join(folder, file+'_'+ str(i) + ext)
+            pydicom.write_file(fullfile, self.datasets(index=i))
+            
+class PETImageStorage(ImagePlaneSeriesStorage):
+    SOPClassUID = '1.2.840.10008.5.1.4.1.1.128'
+    modules = (SOPCommonModule,
+               PatientModule,
+               GeneralStudyModule,
+               GeneralSeriesModule,
+               PETSeriesModule,
+               FrameOfReferenceModule,
+               GeneralEquipmentModule,                                          
+               PETImageModule,
+               ImagePlaneModule,
+               GeneralImageModule,
+               ImagePixelModule,
+               PETIsotopeModule)
+               
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def _set_image(self, image):
+        super()._set_image(image, intercept=0)
 
-def set_default_attributes(ds, template=None, sop_file = None, seq_fcns = {}):
-    REPLACE_DATE = '<Today Date>'
-    REPLACE_TIME = '<Today Time>'
-    NEW_UID = '<New UID>'
-    REMOVE = '<None>'
-    NEW_SEQUENCE = '<Generate Sequence>'
+class CTImageStorage(ImagePlaneSeriesStorage):
+    SOPClassUID = '1.2.840.10008.5.1.4.1.1.2'
+    modules = (SOPCommonModule,
+               PatientModule,
+               GeneralStudyModule,
+               GeneralSeriesModule,
+               FrameOfReferenceModule,
+               GeneralEquipmentModule,                                          
+               ImagePlaneModule,
+               GeneralImageModule,
+               ImagePixelModule,
+               CTImageModule)
+               
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+    
+    def _set_image(self, image):
+        super()._set_image(image, intercept=-1024)
 
-    TODAY_TIME = datetime.datetime.now().time().strftime('%H%M%S')
-    TODAY_DATE = str(datetime.date.today()).replace('-','')
+def write_pet(image, folder='./dicom', filename='pet.dcm', template=None,
+              **kwargs):
+    sop = PETImageStorage(image=image, folder=folder, filename=filename,
+                          template=template, **kwargs)
+    sop.write()
+    return sop
 
-    sop_file_full = pkg_resources.resource_filename(resource_package, sop_file)
-    attributes = yaml.load(open(sop_file_full, 'r'))
-    for attribute, (copy, value) in attributes.items():
-        if value == REPLACE_DATE:
-            value = TODAY_DATE
-        if value == REPLACE_TIME:
-            value = TODAY_TIME
-        if value == NEW_UID:
-            value = UID.generate_uid()
-        if value == NEW_SEQUENCE:
-            value = seq_fcns[attribute]()
-        if copy and template:
-            if hasattr(template, attribute):
-                setattr(ds, attribute, getattr(template, attribute))
-            elif REMOVE != value:
-                setattr(ds, attribute, value)
-        elif REMOVE != value:
-            setattr(ds, attribute, value)
-
-    return ds
-
-def set_image_attributes(ds, sitk_image):
-    tags = [tag.keyword for tag in ds]
-
-    # spacing and slice thickness
-    if sitk_image.GetDimension() == 3:
-        px, py, pz = sitk_image.GetSpacing()
-        nx, ny, nslices = sitk_image.GetSize()
-        setattr(ds, 'SliceThickness', pz)
-        setattr(ds, 'SpacingBetweenSlices', pz)
-        setattr(ds, 'NumberOfSlices', nslices)
-    elif sitk_image.GetDimension() == 2:
-        px, py = sitk_image.GetSpacing()
-        nx, ny = sitk_image.GetSize()
-
-    # rows, columns and slices
-    setattr(ds, 'Rows', nx)
-    setattr(ds, 'Columns', ny)
-    setattr(ds, 'PixelSpacing', [px, py])
-
-    if 'NumberOfFrames' in tags:
-        setattr(ds, 'NumberOfFrames', ds.NumberOfSlices)
-    if 'SliceVector' in tags:
-        vector =  np.arange(1, ds.NumberOfSlices+1).tolist()
-        setattr(ds, 'SliceVector', vector)
-
-    min_pixel = int(round(sptk.geometry.sitk_min(sitk_image)))
-    max_pixel = int(round(sptk.geometry.sitk_max(sitk_image)))
-
-    if 'LargestImagePixelValue' in ds:
-        byte_val = (max_pixel).to_bytes(2, byteorder='little')
-        setattr(ds, 'LargestImagePixelValue', byte_val)
-    if 'SmallestImagePixelValue' in ds:
-        byte_val
-        setattr(ds, 'SmallestImagePixelValue', byte_val)
-
-    window_center = (max_pixel - min_pixel) / 2
-    window_width = max_pixel - min_pixel
-
-    setattr(ds, 'WindowCenter', window_center)
-    setattr(ds, 'WindowWidth', window_width)
-
-    return ds
-
-
-def set_bit_information(ds, nbits = NBITS):
-    setattr(ds, 'BitsAllocated', NBITS)
-    setattr(ds, 'BitsStored', NBITS)
-    setattr(ds, 'HighBit', NBITS-1)
-    return ds
-
-def _detector_information_sequence(RadialPosition = 'None'):
-    seq = Dataset()
-    seq.CenterofRotationOffset = '0'
-    seq.FieldofViewShape = 'RECTANGLE'
-    seq.FieldofViewDimension = ['537', '383']
-    seq.FocalDistance = '0'
-    seq.CollimatorGridName = '@18887197'
-    seq.CollimatorType = 'PARA'
-    seq.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
-    seq.ImagePositionPatient = [0, 0, 0]
-    seq.XFocusCenter = ['0', '0']
-    seq.YFocusCenter = ['0', '0']
-    seq.ZoomFactor = ['1', '1']
-    seq.StartAngle = '180'
-    view_seq = Dataset()
-    view_seq.CodeValue = 'G-A117'
-    view_seq.CodingSchemeDesignator = 'SRT'
-    view_seq.CodeMeaning = 'Transverse'
-    view_seq.ViewModifierCodeSequence = Sequence()
-
-    seq.ViewCodeSequence = Sequence([view_seq])
-
-    if RadialPosition is not 'None':
-        seq.RadialPosition = RadialPosition
-    return Sequence([seq])
-
-def _radiopharmaceutical_information_sequence():
-    seq = Dataset()
-    seq.Radiopharmaceutical = 'None'
-    seq.RadiopharmaceuticalRoute = ''
-    seq.RadiopharmaceuticalVolume = ''
-    seq.RadiopharmaceuticalStartTime = '000000'
-    seq.RadionuclideTotalDose = 0
-    seq.RadionuclideHalfLife = '0'
-    nuclide_seq = Dataset()
-    nuclide_seq.CodeValue = ''# 'C-163A8'
-    nuclide_seq.CodingSchemeDesignator = '' #'99SDM'
-    nuclide_seq.CodeMeaning = '' #'Technetium Tc-99m'
-    seq.RadionuclideCodeSequence = Sequence([nuclide_seq])
-    pharm_seq = Dataset()
-    pharm_seq.CodeValue = ''
-    pharm_seq.CodingSchemeDesignator  = ''
-    pharm_seq.CodeMeaning = ''
-    seq.RadiopharmaceuticalCodeSequence = Sequence([pharm_seq])
-    return Sequence([seq])
-
-def _real_world_value_mapping_sequence(nbits=NBITS):
-    units_seq = Dataset()
-    units_seq.CodeMeaning = 'Bq/ml'
-    units_seq.CodeValue = 'Bq/ml'
-    units_seq.CodingSchemeDesignator = 'UCUM'
-
-    real_world_seq = Dataset()
-    real_world_seq.MeasurementUnitsCodeSequence = Sequence([units_seq])
-
-    minval = (0).to_bytes(length=2, byteorder='little')
-    maxval = (2**nbits-1).to_bytes(length=2, byteorder='little')
-    real_world_seq.RealWorldValueFirstValueMapped = minval
-    real_world_seq.RealWorldValueLastValueMapped = maxval
-    real_world_seq.RealWorldValueSlope = 1
-    real_world_seq.RealWorldValueIntercept = 0
-
-    return Sequence([real_world_seq])
-
-def mapping_sequence_functions():
-    nm_sequence_mapping_fcn = {
-        'DetectorInformationSequence': _detector_information_sequence,
-        'RealWorldValueMappingSequence': _real_world_value_mapping_sequence,
-        'RadiopharmaceuticalInformationSequence': _radiopharmaceutical_information_sequence}
-
-
-    pet_sequence_mapping_fcn = {
-        'RadiopharmaceuticalInformationSequence': _radiopharmaceutical_information_sequence}
-#    nm_acq_sequence_mapping_fcn = {
-#        'RadiopharmaceuticalInformationSequence': _radiopharmaceutical_information_sequence}
-    fcns = {PET_SOP_CLASS: pet_sequence_mapping_fcn,
-            NM_SPECT_SOP_CLASS: nm_sequence_mapping_fcn}
-            #NM_SPECT_ACQ_SOP_CLASS: nm_acq_sequence_mapping_fcn}
-
-    return fcns
-
-def write(dicom_data, export_folder = './output', file_name = 'dicom_file.dcm',
-          SeriesDescription = None):
-    if not(isinstance(dicom_data, (tuple, list))):
-        dicom_data = [dicom_data]
-
-    os.makedirs(export_folder, exist_ok = True)
-
-    for image_number, data_set in enumerate(dicom_data):
-        if SeriesDescription:
-            data_set.SeriesDescription = SeriesDescription
-        file_name_part, ext = os.path.splitext(file_name)
-        file_name_part += '_{0}'.format(image_number)
-        full_file_name = os.path.join(export_folder, file_name_part) + ext
-        data_set.save_as(full_file_name)
-    return True
-
+def write_ct(image, folder='./dicom', filename='ct.dcm', template=None,
+              **kwargs):
+    sop = CTImageStorage(image=image, folder=folder, filename=filename,
+                          template=template, **kwargs)
+    sop.write()   
+    
 if __name__ == "__main__":
-    from DicomDatabaseSQL import Database
-
-    db = Database('/Users/marcel/Horos Data/DATABASE.noindex')
-    data = db.query(PatientID = '1530707', SeriesDescription = 'SPECT 24h pi hals/thorax')
-    image = data.image
-    file = data.files[0]
-    dcm_data = pydicom.read_file(file)
-
-    names = sorted([pydicom.datadict.dictionary_keyword(tag) for tag in dcm_data.keys() if not(tag.is_private)])
-    items = yaml.load(open('nm_spect_acq_sop_class.yml'))
-    item_names = sorted(list(items.keys()))
-    to_remove = [name for name in item_names if name not in names]
-    to_add = [name for name in names if name not in item_names]
-#    import dose_map
-#    import SimpleDicomToolkit as sdtk
-#    pet_dosemap = dose_map.pet_dose_map(yaml_file = '1043509.yml')
-#    dss_clean_pet = sitk_to_pet_dicom(sitk_image=pet_dosemap)
-#
-#    data = dose_map.load_data('1043509.yml')
-#    db = sdtk.Database(folder = data[dose_map.DICOM_FOLDER])
-#    pet = db.query(**{**data[dose_map.PET], **{sdtk.PATIENTID: data[sdtk.PATIENTID]}})
-#    template = dicom.read_file(os.path.join(data[dose_map.DICOM_FOLDER], pet.files[0]))
-#
-#    dss_template_pet = sitk_to_pet_dicom(sitk_image=pet_dosemap, template=template)
-#    write(dss_template_pet, export_folder='./template_pet',
-#          SeriesDescription = 'PET_DOSE_MAP')
-#    spect_dosemap = dose_map.spect_dose_map(yaml_file = '1043509.yml')
-#
-#    dss_clean_spect = sitk_to_nm_dicom(sitk_image=spect_dosemap)
-#    write(dss_clean_spect , export_folder='./clean_spect',
-#          SeriesDescription = 'SPECT_DOSE_MAP')
-#
-#    spect = db.query(**{**data[dose_map.SPECT], **{sdtk.PATIENTID: data[sdtk.PATIENTID]}})
-#    template = dicom.read_file(os.path.join(data[dose_map.DICOM_FOLDER], spect.files[0]))
-#
-#    dss_template_spect = sitk_to_nm_dicom(sitk_image=spect_dosemap, template=template)
-#    write(dss_template_spect , export_folder='./template_spect',
-#          SeriesDescription = 'SPECT_DOSE_MAP')
+    import SimpleDicomToolkit as sdtk
+    import numpy as np
+    import matplotlib.pyplot as plt
+#    try:
+#       image
+#    except:
+    db = sdtk.Database('F:/PSMA/DICOM', scan=False)
+#        image = db.reset().select(PatientName='0202-0378', 
+#                        SeriesDescription='LD_CT_WB_3/3').image
+    folder = 'H:/share/2. Personeel/Marcel/test'
+#    #folder = './test'
+#    sop = CTImageStorage(image=image, folder=folder)
+#    sop.use_template(db.files_with_path[0])
+#    sop.write()
+    pet = db.reset().select(PatientName='0202-0378', 
+                        SeriesDescription='PET_WB_AC_EARL').image
+    petsop = PETImageStorage(image=pet, folder=folder + '/pet',
+                             template=db.files_with_path[0])
+    petsop.write()
+    
+                     

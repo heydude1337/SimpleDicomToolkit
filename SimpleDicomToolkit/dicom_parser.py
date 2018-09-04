@@ -22,6 +22,7 @@ DICOM_DATETIME = '%Y%m%d %H%M%S.%f'
 DICOM_TIME = '%H%M%S.%f'
 LOGGER = Logger(app_name = 'dicom_parser', log_level=logging.ERROR).logger
 
+space = 'SpacE'
 class Header(dict):
     """ Wrapper for dictionary enabling the usage of keys as attributes """
     def __init__(self, *args, **kwargs):
@@ -145,6 +146,8 @@ class Encoder():
                                element=str(hex(element.tag.element)),
                                VR=element.VR,
                                VM=element.VM)
+            # spaces are not handled properly in SQL statements
+            name = name.replace(' ', space)
         else:
             name = element.keyword
         return name
@@ -196,6 +199,8 @@ class Encoder():
                 except:
                     pass # store original string, dicom dt fields are messy
         elif VR == 'TM': # TIME
+            # remove : from non iso datetime formats
+            value = value.replace(':', '')
             if value == '':
                 return Encoder.TM_NULL
             elif '.' in value:
@@ -303,6 +308,8 @@ class Decoder():
             tagname = tagname.replace(Encoder._PRIVATE_TAG_PREFIX, '')
             group, elem, vr, vm = tagname.split(sep='_')
             tag = pydicom.tag.Tag(group, elem)
+            # spaces are not handled properly in SQL statements
+            vr = vr.replace(space, ' ')
         return tag, vr, vm
 
     @staticmethod

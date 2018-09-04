@@ -9,6 +9,7 @@ import json
 import warnings
 import logging
 import pydicom
+import yaml
 
 import SimpleITK as sitk
 import SimpleDicomToolkit as sdtk
@@ -22,14 +23,14 @@ class Database(sdtk.Logger):
     is stored in a seperate column. Sequences are stored in a single column """
 
     _path           = None
-    _LOG_LEVEL      = logging.INFO
+    _LOG_LEVEL      = logging.DEBUG
     _DATABASE_FILE  = 'minidicom.db'    # default file name for database
     _images         = None # cache dict with images
     _image          = None # cache single image
     _headers        = None # cache list of headers
     _tagnames       = None # cache for tagnames in current selection
     _MAX_FILES       = 5000 # max number of files to be read by property images
-
+    _sort_slices_by  = None # Dicom field name to sort slices by field value
     def __init__(self, path, force_rebuild=False, scan=True, silent=False,
                  SUV=True, in_memory=False):
         """ Create a dicom database from path
@@ -41,6 +42,7 @@ class Database(sdtk.Logger):
 
         """
         super().__init__()
+
         self.builder = DatabaseBuilder(path=path, scan=scan,
                                        force_rebuild=force_rebuild,
                                        in_memory=in_memory)
@@ -54,7 +56,7 @@ class Database(sdtk.Logger):
         if silent:
             self._LOG_LEVEL = logging.ERROR
 
-        self.reset() #Ensure all files are selected, clear old selection.
+        self.reset()
 
     def __dir__(self):
         # enable autocomplete dicom tags
@@ -127,6 +129,16 @@ class Database(sdtk.Logger):
     def files(self):
         """ Retrieve all files with  path from the database """
         return self.get_column(self.builder.FILENAME_COL, close=True)
+
+    @property
+    def files_with_path(self):
+        path = self.builder.path
+        return [os.path.join(path, file) for file in self.files]
+
+    @property
+    def sorted_files_with_path(self):
+        join = lambda file: os.path.join(self.builder.path, file)
+        return [join(file) for file in self.sorted_files]
 
     @property
     def columns(self):
@@ -207,24 +219,7 @@ class Database(sdtk.Logger):
         assert hasattr(self, 'SeriesInstanceUID')
         assert isinstance(self.SeriesInstanceUID, str)
 
-        if hasattr(self, 'SliceLocation'):
-            sort_by = 'SliceLocation'
-        elif hasattr(self, 'InstanceNumber'):
-            sort_by = 'InstanceNumber'
-        else:
-            if self.instance_count > 1:
-                warnings.warn('\nSlice Sorting Failed Before Reading!\n',
-                              RuntimeWarning)
-            sort_by = None
-
-        files = self.database.get_column_where(self.builder.MAIN_TABLE,
-                                               self.builder.FILENAME_COL,
-                                               sort_by=sort_by,
-                                               sort_decimal=True,
-                                               **self._selection)
-
-
-        image = sdtk.dicom_reader.read_serie(files, SUV=False,
+        image = sdtk.dicom_reader.read_serie(self.sorted_files, SUV=False,
                                              folder=self.builder.path)
 
         # get first uid from file
@@ -287,6 +282,44 @@ class Database(sdtk.Logger):
         return dict([(key, sitk.GetArrayFromImage(image)) \
                      for key, image in self.images.items()])
 
+    @property
+    def sort_slices_by(self):
+        if self._sort_slices_by is None:
+            if hasattr(self, 'SliceLocation'):
+                self._sort_slices_by = 'SliceLocation'
+            elif hasattr(self, 'InstanceNumber'):
+                self._sort_slices_by = 'InstanceNumber'
+        return self._sort_slices_by
+
+    @sort_slices_by.setter
+    def sort_slices_by(self, value):
+        """
+        Sort slices by given dicom filed
+        """
+        self._sort_slices_by = value
+
+    @property
+    def sorted_files(self):
+        """
+        Sort files by the dicom tag name stored in property sort_slices_by.
+        SimpleIKT Image Reader (unfortunately) expects sorted files to
+        create a volume e.g. CT slices.
+        """
+        sort_by = self.sort_slices_by
+        if self.instance_count > 1 and sort_by is None:
+            warnings.warn('\nSlice Sorting Failed Before Reading!\n',
+                           RuntimeWarning)
+
+        files = self.database.get_column_where(self.builder.MAIN_TABLE,
+                                               self.builder.FILENAME_COL,
+                                               sort_by=sort_by,
+                                               sort_decimal=True,
+                                               **self._selection)
+
+        return files
+
+
+
     def select(self, close=True, **kwargs):
         """ Make an selection in the database, based on values of tags
         for example. For example to select only patient 123456 from the
@@ -337,12 +370,21 @@ class Database(sdtk.Logger):
 
         return self._decode(h_dict)
 
-    def reset(self):
+    def reset(self, tags=None):
         """ After a query a subset of the database is visible, use reset
         to make all data visible again. """
 
-        self._selection = {}
+
+
+        if tags:
+            tags = [tags] if not isinstance(tags, list) else tags
+            for tag in tags:
+                self._selection.pop(tag, None)
+        else:
+            self._selection = {}
+
         self._reset_cache()
+
         return self
 
     def get_column(self, column_name, distinct=True,
@@ -388,6 +430,9 @@ class Database(sdtk.Logger):
         self._image = None
         self._tagnames = None
 
+    def treeview(self, select_pids=None):
+        return treeview(self, select_pids=select_pids, show=True)
+
     @staticmethod
     def _encode_value(tagname, value):
         _, VR, VM = sdtk.Decoder.decode_tagname(tagname)
@@ -421,6 +466,7 @@ class DatabaseBuilder(sdtk.Logger):
     MAIN_TABLE      = 'DicomMetaDataTable'   # stores values for each tag
     _INFO_TABLE      = 'Info'                 # store database version
     _INFO_DESCRIPTION_COL = 'Description'
+    _INFO_PATH_COL = 'path'
     _INFO_VALUE_COL = 'Value'
     _FILENAME_TABLE  = 'FileNameTable' # stores non dicom files
 
@@ -429,14 +475,18 @@ class DatabaseBuilder(sdtk.Logger):
     def __init__(self, path=None, scan=True, silent=False, database_file=None,
                  force_rebuild=False, in_memory=False):
         super().__init__()
-        self.path = self._parse_path(path)
 
-        if database_file is None:
-            database_file = self._get_database_file(path, in_memory=in_memory)
-        self.database_file = database_file
+        path, file = self._parse_path(path)
 
-        self.database = self.open_database(database_file=database_file,
-                                           force_rebuild=force_rebuild)
+        if file is None:
+            file = self._get_database_file(path, in_memory=in_memory)
+        
+ 
+        self.database_file = file
+
+        self.database = self.open_database(database_file=file,
+                                           force_rebuild=force_rebuild, 
+                                           path=path)
 
         files = self.file_list(self.path, index=scan)
 
@@ -448,8 +498,12 @@ class DatabaseBuilder(sdtk.Logger):
         add to the database. These files will not be re-added."""
         return self.database.get_column(self._FILENAME_TABLE,
                                         self.FILENAME_COL)
+    @property
+    def path(self):
+        p = self.database.get_column(self._INFO_TABLE, self._INFO_PATH_COL)[0]
+        return p
 
-    def open_database(self, database_file, force_rebuild=False):
+    def open_database(self, database_file, path, force_rebuild=False):
         """ Open the sqlite database in the file, rebuild if asked """
         database = sdtk.SQLiteWrapper(database_file)
         database._LOG_LEVEL = self._LOG_LEVEL
@@ -468,7 +522,7 @@ class DatabaseBuilder(sdtk.Logger):
         if not self.MAIN_TABLE in database.table_names:
             self._create_main_table(database)
         if not self._INFO_TABLE in database.table_names:
-            self._create_info_table(database)
+            self._create_info_table(database, path=path)
         if not self._FILENAME_TABLE in database.table_names:
             self._create_filename_table(database)
         return database
@@ -501,7 +555,12 @@ class DatabaseBuilder(sdtk.Logger):
         if isinstance(path, str) and os.path.isdir(path):
             # folder passed
             path = os.path.abspath(path)
-        return path
+            file = None
+        elif isinstance(path, str) and os.path.isfile(path):
+            file = path
+            path = None
+        
+        return path, file
 
     def file_list(self, path, index=True):
         """ Search path recursively and return a list of all files """
@@ -526,14 +585,20 @@ class DatabaseBuilder(sdtk.Logger):
         # read file from disk
         fullfile = os.path.join(self.path, file)
 
-        header = pydicom.read_file(fullfile, stop_before_pixels=True)
-
+        try:
+            header = pydicom.read_file(fullfile, stop_before_pixels=True)
+        except FileNotFoundError:
+            # skip file when file had been removed between scanning and
+            # the time point the file is opened.
+            self.logger.debug('{0} not found.'.format(fullfile))
+            return _existing_column_names
 
         # convert header to dictionary
         try:
             hdict = DatabaseBuilder._encode(header)
         except:
             self.database.close()
+            raise
             raise RuntimeError('Cannot add: {file}'.format(file=file))
 
 
@@ -698,19 +763,21 @@ class DatabaseBuilder(sdtk.Logger):
         database.execute(cmd)
 
     @staticmethod
-    def _create_info_table(database, version=VERSION):
+    def _create_info_table(database, version=VERSION, path=None):
         database.logger.info('Create INFO Table with version: ' + str(version))
         cmd = """CREATE TABLE  IF NOT EXISTS {table}
                  (id INTEGER AUTO_INCREMENT PRIMARY KEY,
                   {info_descr} TEXT,
-                  {info_val} TEXT) """
+                  {info_val} TEXT,
+                  {path_col} TEXT) """
 
         cmd = cmd.format(table=DatabaseBuilder._INFO_TABLE,
                          info_descr=DatabaseBuilder._INFO_DESCRIPTION_COL,
-                         info_val=DatabaseBuilder._INFO_VALUE_COL)
+                         info_val=DatabaseBuilder._INFO_VALUE_COL,
+                         path_col=DatabaseBuilder._INFO_PATH_COL)
 
         database.execute(cmd)
-        values = [None, 'Version', version]
+        values = [None, 'Version', version, path]
         database.insert_list(DatabaseBuilder._INFO_TABLE, values)
 
     @staticmethod
@@ -723,6 +790,70 @@ class DatabaseBuilder(sdtk.Logger):
     def _encode(header):
         # pydicom header to dictionary with (json) encoded values
         return sdtk.Header.from_pydicom_header(header)
+
+def treeview(db, select_pids = None, show=True):
+    UKNOWN_SERIES = 'Unkown Series Name'
+    UNKNOW_STUDY = 'Unknown Study Name'
+    UNKNOWN_DATE = 'Unknown Date'
+    UNKNOWN_TIME = 'Unknown Time'
+    UNKNOWN_MODALITY = 'Unkown Modality'
+
+    def number_doubles(name, existing_list):
+        newname = name
+        count = 2
+        while newname in existing_list:
+            newname = name + '-' + str(count)
+            count += 1
+
+        return newname
+
+    to_list = lambda mylist: mylist if isinstance(mylist, list) else [mylist]
+    remove_val = lambda mylist, v: mylist.remove(v) if v in mylist else None
+
+    view = {}
+
+    pids = to_list(db.reset().PatientID)
+    remove_val(pids, None)
+
+    for pid in pids:
+        if select_pids and pid not in select_pids:
+            continue
+        db.reset().select(PatientID=pid) #1
+        studies = {}
+        studies[sdtk.PATIENTID] = db.PatientID #2
+        studies[sdtk.PATIENTNAME] = db.PatientName #3
+
+        study_uids = to_list(db.StudyInstanceUID) #4
+        remove_val(study_uids, None)
+        studies = {}
+        for study_uid in study_uids:
+            db.reset(sdtk.SERIESINSTANCEUID).select(StudyInstanceUID=study_uid) #5
+
+            study_descr = getattr(db, sdtk.STUDYDESCRIPTION, UNKNOW_STUDY) #6
+            study_descr = number_doubles(study_descr, studies.keys())
+            studies[study_descr] = {}
+            date = getattr(db, sdtk.STUDYDATE, UNKNOWN_DATE) #7
+            studies[study_descr][sdtk.STUDYDATE] = date #8
+
+            series_uids = to_list(db.SeriesInstanceUID) #9
+            remove_val(series_uids, None)
+            series = {}
+            for series_uid in series_uids:
+                db.select(SeriesInstanceUID=series_uid)
+                series_descr = getattr(db, sdtk.SERIESDESCRIPTION, UKNOWN_SERIES)
+                series_descr = number_doubles(series_descr, series.keys())
+                series[series_descr] = {}
+                date = getattr(db, sdtk.SERIESDATE, UNKNOWN_DATE)
+                time = getattr(db, sdtk.SERIESTIME, UNKNOWN_TIME)
+                modality = getattr(db, sdtk.MODALITY, UNKNOWN_MODALITY)
+                series[series_descr][sdtk.SERIESDATE] = date
+                series[series_descr][sdtk.SERIESTIME] = time
+                series[series_descr][sdtk.MODALITY] = modality
+            studies[study_descr]['series'] = series
+        view[pid] = studies
+    if show:
+        print(yaml.dump(view, default_flow_style=False))
+    return view
 
 if __name__ == "__main__":
     folder = 'C:/Users/757021/Data/Orthanc'

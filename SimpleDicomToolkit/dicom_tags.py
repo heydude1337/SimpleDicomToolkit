@@ -48,8 +48,57 @@ RESCALESLOPE                  = 'RescaleSlope'
 RADIOPHARMACEUTICALINFORMATIONSEQUENCE = 'RadiopharmaceuticalInformationSequence'
 
 
+PIXELSPACING            = 'PixelSpacing'
+IMAGEORIENTATIONPATIENT = 'ImageOrientationPatient'
+IMAGEPOSITIONPATIENT    = 'ImagePositionPatient'
+SLICETHICKNESS          = 'SliceThickness'
 
+COLUMNS = 'Columns'
+ROWS = 'Rows'
+BITSALLOCATED = 'BitsAllocated'
+BITSSTORED = 'BitsStored'
+HIGHBIT = 'HighBit'
+PIXELREPRESENTATION = 'PixelRepresentation'
+SAMPLESPERPIXEL = 'SamplesPerPixel'
+PHOTOMETRICINTERPRETATION = 'PhotoMetricInterpretation'
 
+FRAMEREFERENCETIME = 'FrameReferenceTime'
+ACQUISITIONDATE = 'AcquisitionDate'
+AcquisitionTime = 'AcquisitionTime'
+ACTUALFRAMEDURATION = 'ActualFrameDuration'
+DECAYFACTOR = 'DecayFactor'
 
+IMAGETYPE = 'ImageType'
+RESCALETYPE = 'RescaleType'
+KVP = 'KVP'
+ACQUISITIONNUMBER = 'AcquisitionNumber'
 
+MANUFACTURER = 'Manufacturer'
 
+FRAMEOFREFERENCEUID = 'FrameOfReferenceUID'
+POSITIONREFERENCEINDICATOR = 'PositionReferenceIndicator'
+
+SERIESNUMBER = 'SeriesNumber'
+PATIENTPOSITION = 'PatientPosition'
+
+STUDYINSTANCEUID = 'StudyInstanceUID'
+STUDYDATE = 'StudyDate'
+STUDYTIME = 'StudyTime'
+REFERRINGPHYSICIANNAME = 'ReferringPhysicianName'
+STUDYID = 'StudyID'
+ACCESSIONNUMBER = 'AccessionNumber'
+
+SERIESDATE = 'SeriesDate'
+SERIESTIME = 'SeriesTime'
+UNITS = 'Units'
+COUNTSSOURCE = 'CountsSource'
+SERIESTYPE = 'SeriesType'
+NUMBEROFSLICES = 'NumberOfSlices'
+CORRECTEDIMAGE = 'CorrectedImage'
+DECAYCORRECTION = 'DecayCorrection'
+COLLIMATORTYPE = 'CollimatorType'
+PixelData = 'PixelData'
+
+RADIONUCLIDECODESEQUENCE = 'RadioNuclideCodeSequence'
+
+CODESCHEMEDESIGNATOR = 'CodeSchemeDesignator'

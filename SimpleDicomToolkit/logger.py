@@ -28,7 +28,7 @@ class Logger():
             self._APP_NAME = app_name
         else:
             self._APP_NAME = self.__class__.__name__
-
+        self.logger.setLevel(self._LOG_LEVEL)
     @property
     def logger(self):
         if self._logger is None:

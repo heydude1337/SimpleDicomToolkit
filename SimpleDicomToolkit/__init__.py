@@ -1,5 +1,5 @@
 import yaml as _yaml
-from SimpleDicomToolkit.logger import Logger
+from SimpleDicomToolkit.logger import Logger, applogger
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.dicom_tags import *
 from SimpleDicomToolkit import dicom_reader
@@ -10,6 +10,6 @@ from SimpleDicomToolkit.file_scanner import FileScanner
 from SimpleDicomToolkit.DicomDatabaseSQL import Database
 from SimpleDicomToolkit.images_on_disk import ImagesOnDisk, CacheToDisk
 #from SimpleDicomToolkit.orthanc import OrthancUploader
-from SimpleDicomToolkit.dicom_writer import sitk_to_nm_dicom, sitk_to_pet_dicom, write
+from SimpleDicomToolkit.dicom_writer import write_pet, write_ct
 
 

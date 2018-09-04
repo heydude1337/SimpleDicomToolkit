@@ -56,16 +56,10 @@ def read_files(file_list):
     return image
 
 
-def read_serie(files, rescale=True, SUV=False, folder=None):
-    """ Read a single image serie from a dicom database to SimpleITK images.
-
-        series_uid: Define the SeriesInstanceUID to be read from the database.
-                    When None (default) it is assumed that the database
-                    contains a single image series (otherwise an error
-                    is raised).
-
-        split_acquisitions: Returns seperate images for each acquisition number.
-        """
+def read_serie(files, rescale=True, SUV=False, folder=None, SUVparams={}):
+    """
+    Read a single image serie from a dicom database to SimpleITK images.
+    """
 
     if folder is not None:
         files = [os.path.join(folder, file) for file in files]
@@ -81,14 +75,15 @@ def read_serie(files, rescale=True, SUV=False, folder=None):
     # calculate and add a SUV scaling factor for PET.
     if SUV:
         factor = suv_scale_factor(pydicom.read_file(files[0],
-                                                    stop_before_pixels=True))
+                                                    stop_before_pixels=True),
+                                  SUVparams)
         image *= factor
         image.BQML_TO_SUV = factor
-        image.SUB_TO_BQML = 1/factor
+        image.SUV_TO_BQML = 1/factor
 
     return image
 
-def suv_scale_factor(header):
+def suv_scale_factor(header, SUVparams={}):
     """ Calculate the SUV scaling factor (Bq/cc --> SUV) based on information
     in the header. Works on Siemens PET Dicom Headers. """
 
@@ -105,18 +100,19 @@ def suv_scale_factor(header):
     injection_datetime_str = header.SeriesDate + ' ' + injection_time
     injection_dt = parse(injection_datetime_str)
 
-    nuclide_dose   = float(nuclide_info.RadionuclideTotalDose)
+    nuclide_dose   = float(getattr(nuclide_info,'RadionuclideTotalDose', -1))
+    patient_weight = float(getattr(header, 'PatientWeight', -1))
+    halflife      = float(getattr(nuclide_info, 'RadionuclideHalfLife', -1))
 
-
-
-    half_life      = float(nuclide_info.RadionuclideHalfLife)
-
-    patient_weight = float(header.PatientWeight)
+    # enable override of SUV parameters
+    if isinstance(SUVparams, dict):
+        patient_weight = SUVparams.pop('patient_weight', patient_weight)
+        halflife = SUVparams.pop('patient_weight', halflife)
+        nuclide_dose = SUVparams.pop('nuclide_dose', nuclide_dose)
+        injection_dt = SUVparams.pop('injection_dt', injection_dt)
 
     delta_time = (series_dt - injection_dt).total_seconds()
-
-    decay_correction = 0.5 ** (delta_time / half_life)
-
+    decay_correction = 0.5 ** (delta_time / halflife)
     suv_scaling = (patient_weight * 1000) / (decay_correction * nuclide_dose)
 
     return suv_scaling
