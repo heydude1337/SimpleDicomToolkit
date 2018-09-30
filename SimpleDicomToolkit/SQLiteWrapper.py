@@ -22,7 +22,7 @@ class SQLiteWrapper(Logger):
     INTEGER     = 'INTEGER'
     BLOB        = 'BLOB'
     ROWID       = 'rowid'
-    _LOG_LEVEL  = logging.DEBUG
+    _LOG_LEVEL  = logging.INFO
 
     START       = 'start'
     END         = 'end'
@@ -228,6 +228,10 @@ class SQLiteWrapper(Logger):
                              where_clause=where_clause,
                              order_q=order_q,
                              distinct=distinct)
+
+        self.logger.debug('Executing query')
+        self.logger.debug(query)
+        self.logger.debug(values)
 
         result = self.execute(query, values=values, fetch_all=True,
                               close=close)

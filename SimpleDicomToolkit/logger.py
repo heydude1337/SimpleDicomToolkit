@@ -21,7 +21,7 @@ class Logger():
     LEVEL_INFO  = logging.INFO
     LEVEL_ERROR = logging.ERROR
 
-    def __init__(self, log_level = logging.INFO, app_name = None):
+    def __init__(self, log_level =  None, app_name = None):
         if log_level is not None:
             self._LOG_LEVEL = log_level
         if app_name is not None:
