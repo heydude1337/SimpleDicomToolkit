@@ -120,11 +120,12 @@ class Encoder():
         else:
             try:
                 value = Encoder._encode_value(element)
-            except ValueError:
+            except (TypeError, ValueError):
                 msg = '\nCannot encode {0}, ommitting tag\n'
                 warnings.warn(msg.format(element), RuntimeWarning)
-
+                raise
                 return None
+            
         return name, value
 
     @staticmethod
@@ -184,7 +185,11 @@ class Encoder():
         be converted to json strings. """
         if isinstance(value, pydicom.valuerep.PersonName3):
             # special treatment of person names
-            value = json.dumps(value.original_string)
+            
+            if isinstance(value.original_string, bytes):
+                value = json.dumps(value.original_string.decode())
+            else:
+                value = json.dumps(value.original_string)
         elif VR == 'DA': # DATE
             if value == '':
                 value = Encoder.DA_NULL
@@ -366,6 +371,28 @@ class Decoder():
                 return False
         except:
             return False
+
+def test_encode(file):
+    try:
+        header = pydicom.read_file(file)
+    except:
+        print('Pydicom Failed to read file(!)')
+        
+    for element in header.values():
+        tag = element.tag
+
+        if tag == (0x7fe0, 0x0010):
+            # discard pixel data
+            continue
+        try:
+            encoded = Encoder.encocode_element(element)
+        except:
+            print('Failed encoding {0} with value {1}'.format(str(tag), str(header[tag])))
+            break
+    return tag, header[tag]
+            
+
+
 if __name__ == "__main__":
     file = 'C:\\Users\\757021\\Data\\Y90\\6772044\\WB\\1.3.12.2.1107.5.6.1.69069.30190118052910055366800000002'
     file = 'C:/Users/757021/Data/Y90/Output/dicom_file_42.dcm'

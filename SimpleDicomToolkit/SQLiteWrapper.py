@@ -22,7 +22,7 @@ class SQLiteWrapper(Logger):
     INTEGER     = 'INTEGER'
     BLOB        = 'BLOB'
     ROWID       = 'rowid'
-    _LOG_LEVEL  = logging.DEBUG
+    _LOG_LEVEL  = logging.INFO
 
     START       = 'start'
     END         = 'end'
@@ -104,7 +104,7 @@ class SQLiteWrapper(Logger):
         cmd = 'ALTER table {table_name} ADD COLUMN {column_name} {var_type}'
 
         #if not column_name in self.column_names(table_name):
-        self.logger.info(('adding column in table {0} with name {1} and'
+        self.logger.debug(('adding column in table {0} with name {1} and'
                           ' vartype{2}').format(table_name, column_name,
                                    var_type))
         self.execute(cmd.format(column_name=column_name,

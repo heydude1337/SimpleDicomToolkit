@@ -23,7 +23,7 @@ class Database(sdtk.Logger):
     is stored in a seperate column. Sequences are stored in a single column """
 
     _path           = None
-    _LOG_LEVEL      = logging.DEBUG
+    _LOG_LEVEL      = logging.INFO
     _DATABASE_FILE  = 'minidicom.db'    # default file name for database
     _images         = None # cache dict with images
     _image          = None # cache single image
@@ -597,10 +597,8 @@ class DatabaseBuilder(sdtk.Logger):
         try:
             hdict = DatabaseBuilder._encode(header)
         except:
-            self.database.close()
-            raise
-            raise RuntimeError('Cannot add: {file}'.format(file=file))
-
+            self.logger.info('Cannot add: %s', file)
+            return _existing_column_names
 
         # store tag names
         hdict[self.TAGNAMES_COL] = json.dumps(list(hdict.keys()))
@@ -860,3 +858,4 @@ if __name__ == "__main__":
     #folder = 'C:/Users/757021/Data/Y90'
     database = Database(path = folder, scan=False)
     database.select(SeriesDescription='WB')
+    file = 'C:/Users/757021/Data/Orthanc/f2/a9/f2a96411-66ca-4506-9e54-247b36c39595'
