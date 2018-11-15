@@ -57,6 +57,7 @@ class Database(sdtk.Logger):
             self._LOG_LEVEL = logging.ERROR
 
         self.reset()
+        self.database.close()
 
     def __dir__(self):
         # enable autocomplete dicom tags
@@ -128,12 +129,15 @@ class Database(sdtk.Logger):
     @property
     def files(self):
         """ Retrieve all files with  path from the database """
-        return self.get_column(self.builder.FILENAME_COL, close=True)
+        file_list = self.get_column(self.builder.FILENAME_COL, close=True)
+        file_list = [file.replace('\\', '/') for file in file_list]
+        return file_list
 
     @property
     def files_with_path(self):
         path = self.builder.path
-        return [os.path.join(path, file) for file in self.files]
+        file_list = [os.path.join(path, file) for file in self.files]
+        return file_list
 
     @property
     def sorted_files_with_path(self):
@@ -316,6 +320,8 @@ class Database(sdtk.Logger):
                                                sort_decimal=True,
                                                **self._selection)
 
+        files = [file.replace('\\', '/') for file in files]
+
         return files
 
 
@@ -395,10 +401,21 @@ class Database(sdtk.Logger):
         else:
             sort_by = None
 
+#        msg = 'Get Column {column} with sort {sort_by} and distinct {distinct}.'
+#        if self._selection:
+#            msg += ' Using selection: {selection}'.format(selection=self._selection)
+
+#        msg = msg.format(column=column_name,
+#                         sort_by=sort_by,
+#                         distinct=distinct)
+#
+#        self.logger.debug(msg)
         values = self.database.get_column(self.builder.MAIN_TABLE,
                                           column_name, sort_by=sort_by,
                                           distinct=distinct,
                                           close=False, **self._selection)
+
+        self.logger.debug('parising column....')
 
         if parse and column_name not in self.non_tag_columns:
             values = [sdtk.Decoder.decode_entry(column_name, vi)[0] \
@@ -414,8 +431,10 @@ class Database(sdtk.Logger):
 
     def _get_tagnames(self):
         """ Return the tag names that are in the database """
+        print('query')
         tagname_rows = self.get_column(self.builder.TAGNAMES_COL,
                                        distinct=True, parse=False)
+        print('sorting' )
         tagnames = set()
         for row in tagname_rows:
             for tagname in json.loads(row):
@@ -480,17 +499,18 @@ class DatabaseBuilder(sdtk.Logger):
 
         if file is None:
             file = self._get_database_file(path, in_memory=in_memory)
-        
- 
+
+
         self.database_file = file
 
         self.database = self.open_database(database_file=file,
-                                           force_rebuild=force_rebuild, 
+                                           force_rebuild=force_rebuild,
                                            path=path)
 
         files = self.file_list(self.path, index=scan)
 
         self._update_db(files=files, silent=silent)
+        self.database.close()
 
     @property
     def files(self):
@@ -503,18 +523,38 @@ class DatabaseBuilder(sdtk.Logger):
         p = self.database.get_column(self._INFO_TABLE, self._INFO_PATH_COL)[0]
         return p
 
+    @path.setter
+    def path(self, path):
+        if path != self.path:
+            self.database.delete_table(self._INFO_TABLE)
+            self._create_info_table(self.database, version=self.version,
+                                    path=path)
+    @property
+    def version(self):
+        return DatabaseBuilder.get_version(self.database)
+
+
+    @version.setter
+    def version(self, version):
+        if version != self.version:
+            self.database.delete_table(self._INFO_TABLE)
+            self._create_info_table(self.database, version=version,
+                                    path=self.path)
+
     def open_database(self, database_file, path, force_rebuild=False):
         """ Open the sqlite database in the file, rebuild if asked """
         database = sdtk.SQLiteWrapper(database_file)
         database._LOG_LEVEL = self._LOG_LEVEL
+        print(self.get_version(database))
 
-        rebuild = self.get_version(database) < VERSION or force_rebuild
+        is_latest = self.get_version(database) ==  VERSION
 
-        if rebuild and not force_rebuild:
-            self.logger.info('Old Database Structure Found, rebuilding entire '
-                             'database...')
+        print(is_latest)
+        if not is_latest:
+            msg = 'Old Database Structure Found, rebuilding recommended!'
+            self.logger.info(msg)
 
-        if rebuild:
+        if force_rebuild:
             msg = 'Removing tables from: %s'
             self.logger.info(msg, database.database_file)
             database.delete_all_tables()
@@ -527,13 +567,14 @@ class DatabaseBuilder(sdtk.Logger):
             self._create_filename_table(database)
         return database
 
-
-    def get_version(self, database):
+    @staticmethod
+    def get_version(database):
         """ Return the version of the database """
-        if self._INFO_TABLE not in database.table_names:
+        if DatabaseBuilder._INFO_TABLE not in database.table_names:
             v = 0
         else:
-            v = database.get_column(self._INFO_TABLE, self._INFO_VALUE_COL)[0]
+            v = database.get_column(DatabaseBuilder._INFO_TABLE,
+                                    DatabaseBuilder._INFO_VALUE_COL)[0]
 
         return float(v)
 
@@ -559,7 +600,7 @@ class DatabaseBuilder(sdtk.Logger):
         elif isinstance(path, str) and os.path.isfile(path):
             file = path
             path = None
-        
+
         return path, file
 
     def file_list(self, path, index=True):

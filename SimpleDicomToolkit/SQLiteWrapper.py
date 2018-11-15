@@ -229,6 +229,10 @@ class SQLiteWrapper(Logger):
                              order_q=order_q,
                              distinct=distinct)
 
+        self.logger.debug('Executing query')
+        self.logger.debug(query)
+        self.logger.debug(values)
+
         result = self.execute(query, values=values, fetch_all=True,
                               close=close)
 
