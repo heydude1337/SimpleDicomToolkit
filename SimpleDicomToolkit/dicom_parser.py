@@ -58,9 +58,9 @@ class Header(dict):
         return Header.from_pydicom_header(header)
 
     @staticmethod
-    def from_pydicom_header(header):
+    def from_pydicom_header(header, use_private_tags=False):
         """ Return Header from pydicom dataset """
-        hdict = Encoder.encode(header)
+        hdict = Encoder.encode(header, use_private_tags=use_private_tags)
         return Header.from_dict(hdict)
 
 
@@ -78,7 +78,7 @@ class Encoder():
     TM_NULL = '-1'
 
     @staticmethod
-    def encode(dicom_header):
+    def encode(dicom_header, use_private_tags=False):
         """ Convert a pydicom header to a dictionary with encoded names
         as keys and (json) encoded values as values. """
 
@@ -92,11 +92,15 @@ class Encoder():
 
         for element in dicom_header.values():
             tag = element.tag
-
+            
+            if not use_private_tags and tag.is_private:
+                # skip private tags
+                continue
+            
             if tag == (0x7fe0, 0x0010):
                 # discard pixel data
                 continue
-
+        
             encoded = Encoder.encocode_element(element)
 
             if encoded is None:

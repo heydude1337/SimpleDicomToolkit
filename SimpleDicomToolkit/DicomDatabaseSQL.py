@@ -32,7 +32,7 @@ class Database(sdtk.Logger):
     _MAX_FILES       = 5000 # max number of files to be read by property images
     _sort_slices_by  = None # Dicom field name to sort slices by field value
     def __init__(self, path, force_rebuild=False, scan=True, silent=False,
-                 SUV=True, in_memory=False):
+                 SUV=True, in_memory=False, use_private_tags=False):
         """ Create a dicom database from path
 
             force_rebuild: Deletes the database file and generates a new database
@@ -45,7 +45,8 @@ class Database(sdtk.Logger):
 
         self.builder = DatabaseBuilder(path=path, scan=scan,
                                        force_rebuild=force_rebuild,
-                                       in_memory=in_memory)
+                                       in_memory=in_memory,
+                                       use_private_tags=use_private_tags)
 
         self.logger.info('Database building completed')
 
@@ -492,9 +493,9 @@ class DatabaseBuilder(sdtk.Logger):
     _chunk_size     = 1000  # number of files to read before committing
 
     def __init__(self, path=None, scan=True, silent=False, database_file=None,
-                 force_rebuild=False, in_memory=False):
+                 force_rebuild=False, in_memory=False, use_private_tags=False):
         super().__init__()
-
+        self.use_private_tags = use_private_tags
         path, file = self._parse_path(path)
 
         if file is None:
@@ -510,6 +511,9 @@ class DatabaseBuilder(sdtk.Logger):
         files = self.file_list(self.path, index=scan)
 
         self._update_db(files=files, silent=silent)
+        
+        self.path = path
+        
         self.database.close()
 
     @property
@@ -636,7 +640,8 @@ class DatabaseBuilder(sdtk.Logger):
 
         # convert header to dictionary
         try:
-            hdict = DatabaseBuilder._encode(header)
+            hdict = DatabaseBuilder._encode(
+                    header, use_private_tags=self.use_private_tags)
         except:
             self.logger.info('Cannot add: %s', file)
             return _existing_column_names
@@ -826,9 +831,10 @@ class DatabaseBuilder(sdtk.Logger):
             yield iterable[i:i + chunksize]
 
     @staticmethod
-    def _encode(header):
+    def _encode(header, use_private_tags=False):
         # pydicom header to dictionary with (json) encoded values
-        return sdtk.Header.from_pydicom_header(header)
+        return sdtk.Header.from_pydicom_header(
+                header, use_private_tags=use_private_tags)
 
 def treeview(db, select_pids = None, show=True):
     UKNOWN_SERIES = 'Unkown Series Name'
