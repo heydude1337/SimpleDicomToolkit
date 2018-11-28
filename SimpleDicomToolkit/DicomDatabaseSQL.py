@@ -9,7 +9,7 @@ import json
 import warnings
 import logging
 import pydicom
-import yaml
+
 
 import SimpleITK as sitk
 import SimpleDicomToolkit as sdtk
@@ -23,7 +23,7 @@ class Database(sdtk.Logger):
     is stored in a seperate column. Sequences are stored in a single column """
 
     _path           = None
-    _LOG_LEVEL      = logging.INFO
+    _LOG_LEVEL      = logging.DEBUG
     _DATABASE_FILE  = 'minidicom.db'    # default file name for database
     _images         = None # cache dict with images
     _image          = None # cache single image
@@ -31,22 +31,36 @@ class Database(sdtk.Logger):
     _tagnames       = None # cache for tagnames in current selection
     _MAX_FILES       = 5000 # max number of files to be read by property images
     _sort_slices_by  = None # Dicom field name to sort slices by field value
+    
     def __init__(self, path, force_rebuild=False, scan=True, silent=False,
                  SUV=True, in_memory=False, use_private_tags=False):
-        """ Create a dicom database from path
+        """ 
+        Create a dicom database from path
 
-            force_rebuild: Deletes the database file and generates a new database
-            scan:    Scans for all dicom files in the path and updates
-                     the database. Missing files will be removed as well
-            silent:  Supress progressbar and log messages except errors
+        force_rebuild: Deletes the database file and generates a new database
+        scan:          Scans for all dicom files in the path and updates
+                       the database. Missing files will be removed as well
+        silent:        Supress progressbar and log messages except errors
+        in_memory:     Don't save database to disk. Creates a temporary 
+                       database in memory.
+        use_private_tags: Set to True to include private tags in the database.
+                          [Experimental]
+            
 
         """
+        if silent:
+            self._LOG_LEVEL = logging.ERROR
+            
+        
         super().__init__()
+        
+        
 
         self.builder = DatabaseBuilder(path=path, scan=scan,
                                        force_rebuild=force_rebuild,
                                        in_memory=in_memory,
-                                       use_private_tags=use_private_tags)
+                                       use_private_tags=use_private_tags,
+                                       silent=silent)
 
         self.logger.info('Database building completed')
 
@@ -54,8 +68,7 @@ class Database(sdtk.Logger):
 
         self.SUV = SUV
         self._selection = {}
-        if silent:
-            self._LOG_LEVEL = logging.ERROR
+
 
         self.reset()
         self.database.close()
@@ -381,8 +394,6 @@ class Database(sdtk.Logger):
         """ After a query a subset of the database is visible, use reset
         to make all data visible again. """
 
-
-
         if tags:
             tags = [tags] if not isinstance(tags, list) else tags
             for tag in tags:
@@ -402,15 +413,6 @@ class Database(sdtk.Logger):
         else:
             sort_by = None
 
-#        msg = 'Get Column {column} with sort {sort_by} and distinct {distinct}.'
-#        if self._selection:
-#            msg += ' Using selection: {selection}'.format(selection=self._selection)
-
-#        msg = msg.format(column=column_name,
-#                         sort_by=sort_by,
-#                         distinct=distinct)
-#
-#        self.logger.debug(msg)
         values = self.database.get_column(self.builder.MAIN_TABLE,
                                           column_name, sort_by=sort_by,
                                           distinct=distinct,
@@ -432,10 +434,9 @@ class Database(sdtk.Logger):
 
     def _get_tagnames(self):
         """ Return the tag names that are in the database """
-        print('query')
+        
         tagname_rows = self.get_column(self.builder.TAGNAMES_COL,
                                        distinct=True, parse=False)
-        print('sorting' )
         tagnames = set()
         for row in tagname_rows:
             for tagname in json.loads(row):
@@ -450,8 +451,6 @@ class Database(sdtk.Logger):
         self._image = None
         self._tagnames = None
 
-    def treeview(self, select_pids=None):
-        return treeview(self, select_pids=select_pids, show=True)
 
     @staticmethod
     def _encode_value(tagname, value):
@@ -494,8 +493,16 @@ class DatabaseBuilder(sdtk.Logger):
 
     def __init__(self, path=None, scan=True, silent=False, database_file=None,
                  force_rebuild=False, in_memory=False, use_private_tags=False):
+        if silent:
+            self._LOG_LEVEL = logging.ERROR
+            
+        
         super().__init__()
+        
+        
+        
         self.use_private_tags = use_private_tags
+        
         path, file = self._parse_path(path)
 
         if file is None:
@@ -547,17 +554,21 @@ class DatabaseBuilder(sdtk.Logger):
 
     def open_database(self, database_file, path, force_rebuild=False):
         """ Open the sqlite database in the file, rebuild if asked """
+        
         database = sdtk.SQLiteWrapper(database_file)
         database._LOG_LEVEL = self._LOG_LEVEL
-        print(self.get_version(database))
+        
+        
 
         is_latest = self.get_version(database) ==  VERSION
 
-        print(is_latest)
+        self.logger.debug('Databae Version: %s', self.get_version(database))
+        self.logger.debug('Latest Version: %s', str(VERSION))
+        
         if not is_latest:
             msg = 'Old Database Structure Found, rebuilding recommended!'
             self.logger.info(msg)
-
+        
         if force_rebuild:
             msg = 'Removing tables from: %s'
             self.logger.info(msg, database.database_file)
@@ -809,6 +820,7 @@ class DatabaseBuilder(sdtk.Logger):
     @staticmethod
     def _create_info_table(database, version=VERSION, path=None):
         database.logger.info('Create INFO Table with version: ' + str(version))
+        
         cmd = """CREATE TABLE  IF NOT EXISTS {table}
                  (id INTEGER AUTO_INCREMENT PRIMARY KEY,
                   {info_descr} TEXT,
@@ -836,73 +848,4 @@ class DatabaseBuilder(sdtk.Logger):
         return sdtk.Header.from_pydicom_header(
                 header, use_private_tags=use_private_tags)
 
-def treeview(db, select_pids = None, show=True):
-    UKNOWN_SERIES = 'Unkown Series Name'
-    UNKNOW_STUDY = 'Unknown Study Name'
-    UNKNOWN_DATE = 'Unknown Date'
-    UNKNOWN_TIME = 'Unknown Time'
-    UNKNOWN_MODALITY = 'Unkown Modality'
 
-    def number_doubles(name, existing_list):
-        newname = name
-        count = 2
-        while newname in existing_list:
-            newname = name + '-' + str(count)
-            count += 1
-
-        return newname
-
-    to_list = lambda mylist: mylist if isinstance(mylist, list) else [mylist]
-    remove_val = lambda mylist, v: mylist.remove(v) if v in mylist else None
-
-    view = {}
-
-    pids = to_list(db.reset().PatientID)
-    remove_val(pids, None)
-
-    for pid in pids:
-        if select_pids and pid not in select_pids:
-            continue
-        db.reset().select(PatientID=pid) #1
-        studies = {}
-        studies[sdtk.PATIENTID] = db.PatientID #2
-        studies[sdtk.PATIENTNAME] = db.PatientName #3
-
-        study_uids = to_list(db.StudyInstanceUID) #4
-        remove_val(study_uids, None)
-        studies = {}
-        for study_uid in study_uids:
-            db.reset(sdtk.SERIESINSTANCEUID).select(StudyInstanceUID=study_uid) #5
-
-            study_descr = getattr(db, sdtk.STUDYDESCRIPTION, UNKNOW_STUDY) #6
-            study_descr = number_doubles(study_descr, studies.keys())
-            studies[study_descr] = {}
-            date = getattr(db, sdtk.STUDYDATE, UNKNOWN_DATE) #7
-            studies[study_descr][sdtk.STUDYDATE] = date #8
-
-            series_uids = to_list(db.SeriesInstanceUID) #9
-            remove_val(series_uids, None)
-            series = {}
-            for series_uid in series_uids:
-                db.select(SeriesInstanceUID=series_uid)
-                series_descr = getattr(db, sdtk.SERIESDESCRIPTION, UKNOWN_SERIES)
-                series_descr = number_doubles(series_descr, series.keys())
-                series[series_descr] = {}
-                date = getattr(db, sdtk.SERIESDATE, UNKNOWN_DATE)
-                time = getattr(db, sdtk.SERIESTIME, UNKNOWN_TIME)
-                modality = getattr(db, sdtk.MODALITY, UNKNOWN_MODALITY)
-                series[series_descr][sdtk.SERIESDATE] = date
-                series[series_descr][sdtk.SERIESTIME] = time
-                series[series_descr][sdtk.MODALITY] = modality
-            studies[study_descr]['series'] = series
-        view[pid] = studies
-    if show:
-        print(yaml.dump(view, default_flow_style=False))
-    return view
-
-if __name__ == "__main__":
-    folder = 'C:/Users/757021/Data/Orthanc'
-    #folder = 'C:/Users/757021/Data/Y90'
-    database = Database(path = folder, scan=False)
-    database.select(SeriesDescription='WB')
-    file = 'C:/Users/757021/Data/Orthanc/f2/a9/f2a96411-66ca-4506-9e54-247b36c39595'

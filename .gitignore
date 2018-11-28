@@ -1,6 +1,9 @@
 # Trash, local saved only
 trash/
 
+#visual studio
+.vscode/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -22,7 +22,7 @@ class SQLiteWrapper(Logger):
     INTEGER     = 'INTEGER'
     BLOB        = 'BLOB'
     ROWID       = 'rowid'
-    _LOG_LEVEL  = logging.INFO
+    _LOG_LEVEL  = logging.ERROR
 
     START       = 'start'
     END         = 'end'
