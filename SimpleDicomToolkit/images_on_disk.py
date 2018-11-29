@@ -7,7 +7,7 @@ import logging
 class CacheToDisk(dict, Logger):
     _LOG_LEVEL = logging.DEBUG
     def __init__(self, folder = None, read_only = False,
-                 *args, **kwargs):
+                 use_cache=True, *args, **kwargs):
         """ Dictionary that keeps a pickle dump of data inside a disk folder.
             Data are the values of the dictionary, filenames are keys of
             the the dictionary. If the key is not present, the folder will be
@@ -34,12 +34,11 @@ class CacheToDisk(dict, Logger):
                 print('Cannot create folder: {0}'.format(folder))
         self.folder = folder
         self.logger.debug('Folder: %s', self.folder)
-
+        self.use_cache = use_cache
         self.read_only = read_only
         self._load_existing()
         self.update(*args, **kwargs)
         self.logger.debug('%s images found in folder', str(len(self.keys())))
-
 
     def _load_existing(self):
         # make existing files visible in keys
@@ -48,21 +47,18 @@ class CacheToDisk(dict, Logger):
                 super().__setitem__(file, file) # set value to str do not load
 
     def __getitem__(self, key):
-
         try:
             data = super().__getitem__(key)
             if isinstance(data, str):
                 raise KeyError # force loading of file
         except KeyError:
             file_name = self._file_name_for_key(key)
-            if os.path.isdir(file_name):
-                data = self.__class__(folder=file_name,
-                                      read_only=self.read_only)
-            else:
-                try:
-                    data = self._load(file_name)
-                except:
-                    raise IOError('Cannot read: {0}'.format(file_name))
+            try:
+                data = self._load(file_name)
+            except:
+                raise IOError('Cannot read: {0}'.format(file_name))
+            if self.use_cache:
+                super().__setitem__(key, data)
         return data
 
     def __setitem__(self, key, value):
@@ -83,6 +79,9 @@ class CacheToDisk(dict, Logger):
 
     def _dump(self, file_name, data):
         pickle.dump(open(file_name, 'rb'), data)
+    
+    def reset_cache(self):
+        super().clear()
 
 class ImagesOnDisk(CacheToDisk):
 
