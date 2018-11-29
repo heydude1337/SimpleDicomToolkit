@@ -12,7 +12,7 @@ README = 'README.md'
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
-VERSION = "1.02"
+VERSION = "1.03"
 
 
 def readme():
@@ -33,7 +33,7 @@ setup(name=NAME,
         'Natural Language :: English'
       ],
       keywords='phantom analysis simpleitk medical dicom',
-      url='https://github.com/heydude1337/SimplePhantomToolkit',
+      url='https://github.com/heydude1337/SimpleDicomToolkit',
       author='HeyDude',
       author_email='heydude1337@gmail.com',
       license='MIT',
