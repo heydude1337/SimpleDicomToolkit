@@ -23,23 +23,3 @@ def progress_bar(iteration, total, prefix = '', suffix = '', decimals = 1, lengt
         print()
 
 
-#
-# Sample Usage
-#
-
-#from time import sleep
-#
-## A List of Items
-#items = list(range(0, 57))
-#l = len(items)
-#
-## Initial call to print 0% progress
-#printProgressBar(0, l, prefix = 'Progress:', suffix = 'Complete', length = 50)
-#for i, item in enumerate(items):
-#    # Do stuff...
-#    sleep(0.1)
-#    # Update Progress Bar
-#    printProgressBar(i + 1, l, prefix = 'Progress:', suffix = 'Complete', length = 50)
-#
-## Sample Output
-#Progress: |█████████████████████████████████████████████-----| 90.0% Complete

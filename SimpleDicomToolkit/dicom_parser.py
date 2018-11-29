@@ -389,7 +389,7 @@ def test_encode(file):
             # discard pixel data
             continue
         try:
-            encoded = Encoder.encocode_element(element)
+            Encoder.encocode_element(element)
         except:
             print('Failed encoding {0} with value {1}'.format(str(tag), str(header[tag])))
             break
@@ -397,11 +397,4 @@ def test_encode(file):
             
 
 
-if __name__ == "__main__":
-    file = 'C:\\Users\\757021\\Data\\Y90\\6772044\\WB\\1.3.12.2.1107.5.6.1.69069.30190118052910055366800000002'
-    file = 'C:/Users/757021/Data/Y90/Output/dicom_file_42.dcm'
-    file = 'C:\\Users\\757021\\Data\\DAQSPECT\\Rotterdam\\LDCTBOT22B70SNM\\1.3.12.2.1107.5.6.1.69069.30190117091108171024700004527.dcm'
-    header = pydicom.read_file(file)
-    encoded = Encoder.encode(header)
-    decoded = Decoder.decode(encoded)
 

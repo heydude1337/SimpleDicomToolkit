@@ -4,6 +4,7 @@ import pickle
 from os.path import splitext
 from SimpleDicomToolkit import Logger
 import logging
+
 class CacheToDisk(dict, Logger):
     _LOG_LEVEL = logging.DEBUG
     def __init__(self, folder = None, read_only = False,
@@ -122,6 +123,3 @@ class ImagesOnDisk(CacheToDisk):
         except:
             raise IOError('Cannot write {0}'.format(file_name))
 
-if __name__ == "__main__":
-    folder = 'F:/PSMA/NII/0207-0116'
-    images = ImagesOnDisk(folder)

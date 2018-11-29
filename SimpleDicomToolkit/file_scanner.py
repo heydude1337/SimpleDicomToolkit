@@ -39,7 +39,3 @@ class FileScanner():
         else:
             files = [os.path.relpath(file, folder) for file in file_gen]
         return files
-
-if __name__ == "__main__":
-    folder = 'C:\\Users\\757021\\Data\\'
-    files = FileScanner.files_in_folder(folder, recursive=True)
