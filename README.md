@@ -8,9 +8,9 @@ interface for handling a large collection of dicom files
 
 build or load database:
 
-'''python
+```python
 db = SimpleDicomToolkit(path='/mydicomfolder')
-'''
+```
 
 database have to be build only once. The database is saved to a file and
 automatically loaded next time. SimpleDicomToolkit will search every time
@@ -20,94 +20,94 @@ loading.
 
 query the database:
 
-'''python
+```python
 db = db.select(PatientName='MyPatient', StudyDescription='MyStudy')
-'''
+```
 
 This will select all dicom files that match above specified PatientName and
 Study Name. Any valid dicom filed can be used to query/select the files.
 
-'''python
+```python
 db.files and db.files_with_fullpath
-'''
+```
 
 Will give a list of currently selected files from the database with the relative
 and fullpath to these files. If no selection is made it will give a list of
 all files.
 
-'''python
+```python
 db.selection
-'''
+```
 
 Will return the currently used filter for selecting the files.
 
-'''python
+```python
 db.reset()
-'''
+```
 
 Will remove the current selection filter
 
-'''python
+```python
 db.SeriesDescription
-'''
+```
 
 Will give a list of (unique) SeriesDescriptions for the current selection. This
 works for all dicom fields (PatientName, StudyDescription, etc.)
 
 ## Reading images
 
-'''python
+```python
 myscript(db.files_with_path)
-'''
+```
 
 You can use your own script to read the dicom files by passing the filenames
 of the current selection.
 
-'''python
+```python
 db.image
-'''
+```
 
 In addition after selecting a single dicom series, this may return a SimpleITK a
 image. It probably works for CT, PET, SPECT, and planar imaging and might
 work for MRI.
 
-'''python
+```python
 db.array
-'''
+```
 
 Will return a numpy array for the given selection.
 
 ## Advanced usage
 
-'''python
+```python
 db = SimpleDicomToolkit(path='/mydicomfolder', scan=False)
-'''
+```
 Will load a currently stored database, but will not scan for new files.
 
-'''python
+```python
 db = SimpleDicomToolkit(path='/mydicomfolder', force_rebuild=True)
-'''
+```
 
 Will remove existing database and rebuild the database from scratch
 
-'''python
+```python
 db = SimpleDicomToolkit(path='/mydicomfolder', in_memory=True)
-'''
+```
 
 Do not create a database file, but only create a temporary database in memory.
 Database will not be saved.
 
-'''python
+```python
 db = SimpleDicomToolkit(path='/myfolder', SUV=True)
-'''
+```
 
 Will convert images to SUV when using db.image and db.array. This works probably
 for Siemens PET and may or may not work for other vendors due to possible different
 dicom implementations of SUV values.
 
-'''python
+```python
 db.reset('SeriesDescription')
-'''
+```
 
 Will only remove the specified dicom field from the current selection.
 
