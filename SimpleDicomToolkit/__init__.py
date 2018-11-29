@@ -1,4 +1,3 @@
-import yaml as _yaml
 from SimpleDicomToolkit.logger import Logger, applogger
 from SimpleDicomToolkit.progress_bar import progress_bar
 from SimpleDicomToolkit.dicom_tags import *
