@@ -23,7 +23,6 @@ class Database(sdtk.Logger):
     is stored in a seperate column. Sequences are stored in a single column """
 
     _path           = None
-    _LOG_LEVEL      = logging.DEBUG
     _DATABASE_FILE  = 'minidicom.db'    # default file name for database
     _images         = None # cache dict with images
     _image          = None # cache single image

@@ -12,7 +12,6 @@ class SQLiteWrapper(Logger):
     """ Pythonic interface for a sqlite3 database """
 
     DATABASE_FILE = 'database.db'
-#    ID          = 'id'
     IN_MEMORY   = ':memory:'
 
     # Datatypes supported by SQLite3

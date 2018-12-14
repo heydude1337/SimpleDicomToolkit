@@ -9,11 +9,13 @@ Created on Thu Oct 26 20:52:25 2017
 """
 import logging
 
+DEFAULT_LOG_LEVEL = logging.ERROR
+
 class Logger():
     _logger = None
     _APP_NAME = 'Application'
     _LOG_FILE = None
-    _LOG_LEVEL = logging.INFO
+    _LOG_LEVEL = DEFAULT_LOG_LEVEL
     _LOG_TO_CONSOLE = True
     _LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
@@ -40,7 +42,7 @@ class Logger():
         return self._logger
 
 
-def applogger(app_name, fname = None, log_level = logging.DEBUG,
+def applogger(app_name, fname = None, log_level = DEFAULT_LOG_LEVEL,
                        log_to_console = True, log_format = None):
   """ Create a simple logger object for a specific application name (app_name).
       log_level and log_to_console can be set. Log to file is done when fname

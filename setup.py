@@ -12,7 +12,7 @@ README = 'README.md'
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
-VERSION = "1.4"
+VERSION = "1.4.2"
 
 
 def readme():
@@ -41,15 +41,8 @@ setup(name=NAME,
       install_requires=[
           'SimpleITK', 
           'pydicom', 
-          'httplib2', 
           'pyyaml',
-          'dateutil',
-          'sqlite3',
-          'logging',
-          'os',
-          'json',
-          'warnings',
-          'pickle',
+          'python-dateutil',
           
       ],
       include_package_data=True,
