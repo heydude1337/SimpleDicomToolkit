@@ -644,13 +644,22 @@ class DatabaseBuilder(sdtk.Logger):
 
         try:
             header = pydicom.read_file(fullfile, stop_before_pixels=True)
-        except (FileNotFoundError, AttributeError):
+        except FileNotFoundError:
             # skip file when file had been removed between scanning and
             # the time point the file is opened.
-            # Attribute error is thrown when reading a dicom dirfile by pydiom
-            self.logger.debug('{0} not found.'.format(fullfile))
+            
+            self.logger.info('{0} not found.'.format(fullfile))
             return _existing_column_names
-
+        except AttributeError:
+            # Attribute error is thrown when reading a dicom dirfile by pydiom
+            self.logger.info('{0} not proper dicom.'.format(fullfile))
+            return _existing_column_names
+        except:
+            msg = ('WARNING: Unhandled exception while reading {0}. '
+                   'File is skipped')
+            print(msg.format(fullfile))
+            return _existing_column_names
+            
         # convert header to dictionary
         try:
             hdict = DatabaseBuilder._encode(
