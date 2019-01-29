@@ -12,7 +12,7 @@ README = 'README.md'
 DESCRIPTION = 'Dicom Toolkit for reading dicom files to  SimpleITK images'
 NAME = 'SimpleDicomToolkit'
 
-VERSION = "1.4.2"
+VERSION = "1.4.3"
 
 
 def readme():
