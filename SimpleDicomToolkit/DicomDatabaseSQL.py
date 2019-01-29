@@ -30,6 +30,7 @@ class Database(sdtk.Logger):
     _tagnames       = None # cache for tagnames in current selection
     _MAX_FILES       = 5000 # max number of files to be read by property images
     _sort_slices_by  = None # Dicom field name to sort slices by field value
+    #_LOG_LEVEL = logging.DEBUG
     
     def __init__(self, path, force_rebuild=False, scan=True, silent=False,
                  SUV=True, in_memory=False, use_private_tags=False):
@@ -487,6 +488,7 @@ class DatabaseBuilder(sdtk.Logger):
     _INFO_PATH_COL = 'path'
     _INFO_VALUE_COL = 'Value'
     _FILENAME_TABLE  = 'FileNameTable' # stores non dicom files
+    #_LOG_LEVEL = logging.DEBUG
 
     _chunk_size     = 1000  # number of files to read before committing
 
@@ -642,9 +644,10 @@ class DatabaseBuilder(sdtk.Logger):
 
         try:
             header = pydicom.read_file(fullfile, stop_before_pixels=True)
-        except FileNotFoundError:
+        except (FileNotFoundError, AttributeError):
             # skip file when file had been removed between scanning and
             # the time point the file is opened.
+            # Attribute error is thrown when reading a dicom dirfile by pydiom
             self.logger.debug('{0} not found.'.format(fullfile))
             return _existing_column_names
 
